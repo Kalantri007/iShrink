@@ -36,7 +36,7 @@ A modern, fast, privacy-focused **macOS** desktop application that can:
 - Process all media locally, never uploading user media
 - Be fully open source
 
-The internal compression engine is kept platform-agnostic for potential reuse; the Apple Photos integration is macOS-native.
+The engine and the Apple Photos integration are both macOS-native — no other platform is on the roadmap, so no cross-platform abstraction is carried for its own sake.
 
 ---
 
@@ -204,9 +204,9 @@ Generate reports including:
 
 - **Privacy-first:** iShrink never uploads or transmits your media to any third party; all processing happens on your device
 - **v1 works on local originals only** (assets whose full-resolution originals are present on the Mac); iCloud download-on-demand is deferred to a later phase
-- **v1 assumes a non-iCloud library:** detect iCloud Photos and gate/warn; full iCloud-aware sync handling deferred
+- **v1 assumes a non-iCloud library:** there is no public API to detect the library-wide iCloud Photos toggle (only per-asset availability, which can't distinguish a fully-downloaded iCloud library from a genuinely local one) — so at first run, ask the user directly whether iCloud Photos is enabled and remember the answer; if yes, gate/warn per the sync-safety requirement below; full iCloud-aware sync handling deferred to a later phase
 - Open source
-- macOS-native architecture (image/video engine kept platform-agnostic for potential reuse)
+- macOS-native architecture
 - Multi-threaded
 - Hardware accelerated
 - Bounded, streaming pipeline with a live free-space guardrail (adaptive batch sizing, immediate temp cleanup, pause when disk runs low)
@@ -215,6 +215,7 @@ Generate reports including:
 - Verify each compressed output (decode + checksum) before it is allowed to replace an original
 - Move replaced originals to the system's Recently Deleted (30-day undo window); offer an optional archive of originals to an external location for permanent rollback
 - Require explicit confirmation (naming file count and total GB) before any permanent deletion
+- Require Photos.app to be closed and operate exclusively through PhotoKit change requests; abort and retry safely on concurrent-modification errors
 - Prefer native Apple frameworks; run any remaining third-party binary in a sandboxed, no-network subprocess built from pinned/verified sources
 - Reliable for libraries with 100,000+ assets
 
@@ -402,14 +403,14 @@ https://github.com/szTheory/exifcleaner — Cross-platform desktop application, 
 ## Phase 4
 
 - iCloud-aware handling (download-on-demand originals; sync-safe deletes)
-- CLI over the same engine
 
 ---
 
 # Near-term Stretch Goals
 
+CLI is independent of the phased roadmap above — it can ship whenever capacity allows, not gated behind Phase 4. Homebrew ships with v1 itself (see Distribution) and is not a stretch goal.
+
 - Command Line Interface (CLI) over the same core engine
-- Homebrew package
 
 ---
 
@@ -434,7 +435,7 @@ These are deliberately parked outside the roadmap until the compression core is 
 # Success Metrics
 
 - Reduce local library size by **30% to 70%** for libraries with significant JPEG / H.264 content (modern HEIC / HEVC libraries yield less); the actual estimate is computed per-library from the real codec mix
-- Preserve visually indistinguishable quality (verified against a measurable quality floor at the Verification step)
+- Preserve visually indistinguishable quality — today's Verification step only checks integrity (decode + checksum), not visual quality; a concrete quality metric and threshold (e.g. SSIM) is an open decision, to be finalized during implementation planning (see Open follow-ups)
 - **Never delete a user's only copy without explicit consent;** the quality trade-off is opt-in and shown before committing
 - All processing local; no third-party uploads
 - Support libraries containing **100,000+ assets**
@@ -444,7 +445,7 @@ These are deliberately parked outside the roadmap until the compression core is 
 
 # Inspiration
 
-The goal of **iShrink** is to become for Apple Photos what projects like **Immich** and **PhotoPrism** are for self-hosted photo management: a trusted, community-driven, open source tool that gives users complete control over their media while solving a real storage problem without compromising privacy.
+The goal of **iShrink** is to become for Apple Photos compression what **CompressO** is for general video compression: a focused, trusted, community-driven open source tool that does one job — safely shrinking a Photos library — extremely well, without compromising privacy. Media management, indexing, and self-hosting (the territory of Immich and PhotoPrism) are deliberately not the goal; see "Ideas / Maybe Later" for why that's a boundary, not an oversight.
 
 ---
 
@@ -492,7 +493,24 @@ The 20 open questions from the document review were resolved as follows. Items m
 19. **Curation/dedup:** moved entirely to the Ideas list (out of the roadmap).
 20. **Extensibility:** plugin system / REST API / NAS / Immich moved to Ideas; CLI kept as a near-term stretch over the same engine.
 
+### From 2026-07-24 review, round 2
+
+A second review pass on the rewritten document (using the same reviewer panel) caught one regression from round 1 and two new judgment calls that only surfaced once the document was fully drafted.
+
+21. **iCloud detection is not technically possible via a public API** (only per-asset local-availability, which can't distinguish a downloaded-iCloud library from a genuinely local one) — resolved: ask the user directly at first run whether iCloud Photos is enabled and remember the answer, rather than attempting silent auto-detection.
+22. **Quality-floor claim was unfalsifiable** ("verified against a measurable quality floor" with no metric defined anywhere, while Verification is elsewhere defined as decode+checksum only) — resolved: reworded Success Metrics to state this honestly as an open decision, deferred to planning rather than implied as already solved.
+23. **Regression fix:** the round-1 "Photos.app must be closed + PhotoKit-only + retry on concurrent modification" safeguard was accidentally dropped when the full document was rewritten to apply the round-1 decisions. Restored to Non-Functional Requirements.
+
+Also fixed as straightforward consistency cleanups (no judgment needed): CLI was listed both as an independent near-term stretch goal and gated behind Phase 4 — removed from Phase 4, since nothing about a CLI depends on iCloud support; Homebrew was listed as a stretch goal despite being a committed v1 distribution channel (Decision #17) — removed from Stretch Goals; the "platform-agnostic engine" framing had no roadmapped non-Apple consumer — dropped; the Inspiration section still pitched a full media-management platform (Immich/PhotoPrism) contradicting the compression-only scope from Decisions #19–20 — reworded to match.
+
 ## Open follow-ups
 
-- **Spike (Q1):** verify the create-new + delete-old workflow preserves date/location/favorite/album/Live-pairing on the new asset, before Phase 3.
+- **Spike (Q1):** verify the create-new + delete-old workflow preserves date/location/favorite/album/Live-pairing on the new asset, before Phase 3. The spike script is written (`spikes/photokit-replace-spike/`) but has not yet been run.
+- **Extend the spike:** the current spike only tests {creation date, location, favorite, album, Live Photo pairing} — it does not test EXIF camera model, lens info, orientation, or timezone, which Metadata Preservation unconditionally promises to preserve. These live in file-embedded metadata carried through an actual re-encode (ImageIO/CGImageMetadata), a different mechanism than the PHAsset-level properties the current spike checks. Extend the spike (or add a second one) to verify this before Phase 2/3.
+- **"Atomic" transaction has a real crash-window:** create-new and delete-old are two separate PhotoKit `performChanges` calls, not one — confirmed by the spike's own implementation. If the app crashes between them, the journal/resume design needs an explicit rule for an asset that has a new copy created but the old one not yet deleted (avoid creating a second duplicate on resume). Resolve during planning.
+- **No throughput budget:** at 100,000+ assets, two PhotoKit write transactions per asset is up to 200,000 round-trips; no latency/throughput target is stated. Measure actual `performChanges` cost during the spike phase and decide if batching is needed.
+- **Archive ordering:** the optional external-archive step (Decision #2) isn't yet placed in the per-asset transaction sequence — decide whether the archive write must complete and be verified *before* delete-old is allowed to run.
+- **Fallback library justification:** FFmpeg, libheif, libvips, and ImageMagick are all still listed as fallbacks with no stated per-library justification for why more than one is needed alongside the preferred native frameworks. Narrow this during planning once the native-first spike shows what gaps (if any) remain.
+- **Sandboxing mechanism unnamed:** "sandboxed, no-network subprocess" for fallback binaries doesn't name a mechanism, and v1's non-App-Store distribution means the App Sandbox entitlement isn't automatic. Decide during planning (e.g., App Sandbox entitlement + seatbelt profile, or a dedicated XPC service).
+- **Manual-selection UX at scale:** hand-picking assets across 100,000+ items needs a browsing/sort/search/bulk-select spec that doesn't exist yet — needed before the Selection UI can be built.
 - **Validate savings:** measure realistic savings on a modern (already-HEIC/HEVC) library to confirm the 30–70% framing before making it a headline.
