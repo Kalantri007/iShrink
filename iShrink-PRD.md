@@ -1,8 +1,8 @@
 # iShrink
 
-> **Open Source Apple Photos Library Optimizer**
+> **Open Source Apple Photos Library Optimizer (macOS)**
 >
-> A privacy-first, open source application that intelligently compresses photos and videos in an Apple Photos library while preserving visual quality, metadata, and user privacy.
+> A privacy-first, open source Mac app that safely compresses the photos and videos in your Apple Photos library to reclaim local disk space — preserving visual quality and metadata, and never sending your media anywhere.
 
 ---
 
@@ -18,34 +18,25 @@ As users continue using their devices over the years, their photo libraries ofte
 - Move photos to external hard drives
 - Use closed source, paid compression applications
 
-While several commercial applications solve parts of this problem, almost all of them are:
+While several commercial applications solve parts of this problem, almost all of them are closed source, subscription/paid, limited in automation, not extensible, and not transparent about how media is processed.
 
-- Closed source
-- Subscription based or paid
-- Limited in automation
-- Not extensible
-- Not transparent about how media is processed
-- Impossible for developers to audit or contribute to
-
-Despite the popularity of this problem, there is currently **no mature open source project** that provides a complete solution for optimizing an Apple Photos library while preserving user data, metadata, and visual quality.
-
-**iShrink** aims to fill this gap by becoming the first fully open source, privacy-first Apple Photos optimizer.
+General-purpose open source building blocks exist (FFmpeg, libvips, CompressO, ExifTool), but **no open source tool integrates natively with the Apple Photos library to perform safe, in-library compression and original replacement while preserving metadata.** That specific, Photos-native, safety-first workflow is the gap **iShrink** fills.
 
 ---
 
 # Vision
 
-Build the **"Immich for Photo Compression."**
+A modern, fast, privacy-focused **macOS** desktop application that can:
 
-A modern, fast, privacy-focused desktop application that can:
-
-- Scan an Apple Photos library
-- Estimate potential storage savings
+- Scan an Apple Photos library on the Mac
+- Estimate realistic storage savings from the library's actual codec mix
 - Compress photos and videos using modern codecs
-- Preserve metadata
-- Safely replace originals (optional)
-- Work completely offline
+- Preserve metadata (as far as PhotoKit allows)
+- Safely replace originals (optional), with a recoverable undo window
+- Process all media locally, never uploading user media
 - Be fully open source
+
+The internal compression engine is kept platform-agnostic for potential reuse; the Apple Photos integration is macOS-native.
 
 ---
 
@@ -53,25 +44,35 @@ A modern, fast, privacy-focused desktop application that can:
 
 ## Primary Goals
 
-- Reduce storage usage without noticeable quality loss
-- Preserve important metadata
-- Work directly with Apple Photos
+- Reduce **local disk usage** of the Mac's Photos library without noticeable quality loss
+- Preserve important metadata (what PhotoKit permits; see Metadata Preservation)
+- Work directly with Apple Photos via PhotoKit
 - Process large libraries efficiently
-- Keep all processing local
-- Never upload user media
-- Provide a safe and reversible workflow
+- Keep all processing local — never upload or transmit user media to any third party
+- Provide a safe, reversible workflow with verification before any deletion
+
+## Guiding Trade-off Rule
+
+When fidelity and savings conflict, **preserve the original**. Master formats (RAW / ProRAW / ProRes) are excluded from compression by default.
 
 ---
 
 # Target Users
 
-- iPhone users running out of storage
-- Mac users with large Photos libraries
-- Families sharing iCloud storage
-- Photographers
-- Developers
+**Primary persona:** a Mac user with a large, everyday Apple Photos library who is running low on local disk space.
+
+> **Requirement:** iShrink runs on macOS and operates on an Apple Photos library that is accessible on that Mac.
+
+**Secondary (v1 benefits, not the focus):**
+
+- Families managing a shared Mac library
+- Developers and open source contributors
 - Privacy-conscious users
-- Open source contributors
+
+**Future / aspirational (out of v1 scope):**
+
+- iPhone-only users with no Mac (would require a separate iOS app; iOS PhotoKit is more restrictive for this workflow)
+- Photographers who want a dedicated non-destructive RAW workflow
 
 ---
 
@@ -90,9 +91,18 @@ A modern, fast, privacy-focused desktop application that can:
 - Report current codec breakdown (JPEG / HEIC / H.264 / HEVC)
 - Estimate potential storage savings from the real per-library codec mix
 
----
+## Selection
+
+Users can choose what to compress through any of three modes, all ending in a mandatory confirmation:
+
+- **Smart default** — iShrink proposes the best-savings set (largest space-savers, excluding master formats by default)
+- **Manual** — hand-pick individual assets
+- **Filters/rules** — e.g. "videos over 200 MB, older than 2 years"
+- **Mandatory confirmation** before any job runs, showing item count, current size → estimated size, and estimated savings
 
 ## Compression Engine
+
+Per-type policy (see Guiding Trade-off Rule):
 
 ### Photos
 
@@ -112,7 +122,11 @@ A modern, fast, privacy-focused desktop application that can:
 - Hardware accelerated encoding
 - Skip files already in HEVC unless bitrate reduction is explicitly requested
 
----
+### Special media (default policy)
+
+- **RAW / ProRAW / ProRes / Cinematic:** excluded by default; advanced opt-in only, with an explicit warning
+- **Live Photos:** re-encode both paired resources together and preserve the pairing
+- **HDR / Dolby Vision:** preserve HDR when transcoding — never silently flatten to SDR
 
 ## Metadata Preservation
 
@@ -126,30 +140,51 @@ Preserve:
 - Orientation
 - Timezone information
 
-Where possible:
+Where possible (re-attached to the newly created asset):
 
 - Album membership
 - Favorite status
-- Captions
-- Keywords
+- Creation date
+- Live Photo pairing
+
+Cannot be preserved (no PhotoKit API) — clearly disclosed to the user up front:
+
+- Faces / People tagging
+- Memories history
 
 Handling of sensitive metadata:
 
 - Store temporary working copies containing EXIF / GPS data in an app-private location and delete them promptly after processing
 
----
-
 ## Preview
 
-Before compressing:
+- A **batch summary** as the primary decision surface: total items, original size, estimated compressed size, estimated storage savings, and a breakdown by type/album
 
-- Original size
-- Estimated compressed size
-- Estimated storage savings
-- Side-by-side comparison
-- Compression ratio
+## Progress & Job Control
 
----
+- Persistent progress UI: items done / total, current file, elapsed time and ETA, running GB saved
+- **Pause** and **Cancel**, both stopping safely at an item boundary (never mid-item)
+- Job continues if the window is closed while the app stays open
+
+## Resume & Atomicity
+
+- Each asset is processed as an atomic transaction: encode to temp → verify → add new → delete old
+- A durable job journal records progress
+- On relaunch after an interruption: a **Resume / Discard** prompt (items done / remaining); any item not fully committed is treated as not-done and re-run from the untouched original
+
+## Failure Handling
+
+- Per-item isolation: a failure never halts the batch
+- A file whose compression or verification fails **keeps its original** — never deleted
+- Transient failures (disk pressure, briefly locked file) get one automatic retry
+- All failures are logged and surfaced in the job report
+
+## Permissions
+
+- First-run pre-prompt explaining why full library access is needed and that nothing leaves the Mac
+- Denied-access state with a one-click deep link to System Settings
+- "Limited access" handling (explain full access is required for a whole-library scan)
+- If access is revoked mid-job, pause safely and warn
 
 ## Reporting
 
@@ -167,18 +202,20 @@ Generate reports including:
 
 # Non-Functional Requirements
 
-- 100% offline
+- **Privacy-first:** iShrink never uploads or transmits your media to any third party; all processing happens on your device
+- **v1 works on local originals only** (assets whose full-resolution originals are present on the Mac); iCloud download-on-demand is deferred to a later phase
+- **v1 assumes a non-iCloud library:** detect iCloud Photos and gate/warn; full iCloud-aware sync handling deferred
 - Open source
 - macOS-native architecture (image/video engine kept platform-agnostic for potential reuse)
 - Multi-threaded
 - Hardware accelerated
-- Resume interrupted jobs
+- Bounded, streaming pipeline with a live free-space guardrail (adaptive batch sizing, immediate temp cleanup, pause when disk runs low)
+- Resume interrupted jobs (atomic per-asset transactions + durable journal)
 - Memory efficient
-- Safe rollback
 - Verify each compressed output (decode + checksum) before it is allowed to replace an original
-- Move replaced originals to a recoverable staging area, retained until user-confirmed cleanup — never immediate permanent deletion
+- Move replaced originals to the system's Recently Deleted (30-day undo window); offer an optional archive of originals to an external location for permanent rollback
 - Require explicit confirmation (naming file count and total GB) before any permanent deletion
-- Require Photos.app to be closed and operate exclusively through PhotoKit change requests; abort and retry safely on concurrent-modification errors
+- Prefer native Apple frameworks; run any remaining third-party binary in a sandboxed, no-network subprocess built from pinned/verified sources
 - Reliable for libraries with 100,000+ assets
 
 ---
@@ -186,35 +223,37 @@ Generate reports including:
 # Proposed Architecture
 
 ```text
-Apple Photos Library
+Apple Photos Library (local originals, non-iCloud in v1)
         │
         ▼
 PhotoKit Scanner
         │
         ▼
-Media Analyzer
+Media Analyzer (codec mix, savings estimate, type detection)
         │
         ▼
-Compression Planner
+Selection + Confirmation (smart / manual / filters)
+        │
+        ▼
+Compression Planner (per-type policy)
         │
         ▼
 Compression Engine
-   ├── FFmpeg
-   ├── VideoToolbox
-   ├── libheif
-   └── libvips/ImageMagick
+   ├── ImageIO / Core Image (images, preferred)
+   ├── AVFoundation / VideoToolbox (video, preferred)
+   └── FFmpeg / libheif (sandboxed subprocess, only where native is insufficient)
         │
         ▼
-Metadata Preservation
+Metadata Preservation (re-attach date/location/favorite/album/Live pairing)
         │
         ▼
-Verification
+Verification (decode + checksum) — gate before any deletion
         │
         ▼
-Import Optimized Media
+Create New Asset (PHAssetCreationRequest)
         │
         ▼
-Optional Original Cleanup
+Delete Old Asset → Recently Deleted (30-day undo) + optional external archive
         │
         ▼
 Storage Report
@@ -229,7 +268,7 @@ Storage Report
 - Swift
 - SwiftUI
 
-## Apple Frameworks
+## Apple Frameworks (preferred)
 
 - PhotoKit
 - AVFoundation
@@ -238,7 +277,7 @@ Storage Report
 - Core Image
 - UniformTypeIdentifiers
 
-## Compression
+## Compression (fallback, sandboxed — only where native APIs fall short)
 
 - FFmpeg
 - libheif
@@ -247,7 +286,11 @@ Storage Report
 
 ## Metadata
 
-- ExifTool
+- Native `CGImageMetadata` / ImageIO preferred; ExifTool only as a sandboxed fallback
+
+## Distribution
+
+- v1 ships as a **notarized direct download** (and Homebrew), which allows the fallback toolchain and GPL components; a Mac App Store build remains possible later if the native-first engine proves sufficient
 
 ---
 
@@ -255,153 +298,53 @@ Storage Report
 
 ## 1. CompressO
 
-**GitHub**
+**GitHub:** https://github.com/codeforreal1/compressO
 
-https://github.com/codeforreal1/compressO
-
-**Why**
-
-- Desktop architecture
-- Batch compression
-- FFmpeg integration
-- Modern UI
-- Compression pipeline
-
----
+**Why:** Desktop architecture, batch compression, FFmpeg integration, modern UI, compression pipeline
 
 ## 2. FFmpeg
 
-https://github.com/FFmpeg/FFmpeg
-
-**Useful For**
-
-- Video compression
-- Codec support
-- HEVC
-- AV1
-- Hardware encoding
-
----
+https://github.com/FFmpeg/FFmpeg — Video compression, codec support, HEVC, AV1, hardware encoding
 
 ## 3. libheif
 
-https://github.com/strukturag/libheif
-
-**Useful For**
-
-- HEIC encoding
-- AVIF support
-- Modern image compression
-
----
+https://github.com/strukturag/libheif — HEIC encoding, AVIF support, modern image compression
 
 ## 4. libvips
 
-https://github.com/libvips/libvips
-
-**Useful For**
-
-- Extremely fast image processing
-- Low memory usage
-- Batch operations
-
----
+https://github.com/libvips/libvips — Extremely fast image processing, low memory usage, batch operations
 
 ## 5. ImageMagick
 
-https://github.com/ImageMagick/ImageMagick
-
-**Useful For**
-
-- Image conversion
-- Image optimization
-- Batch processing
-
----
+https://github.com/ImageMagick/ImageMagick — Image conversion, optimization, batch processing
 
 ## 6. ExifTool
 
-https://github.com/exiftool/exiftool
-
-**Useful For**
-
-- Metadata preservation
-- EXIF handling
-- GPS information
-- Camera information
-
----
+https://github.com/exiftool/exiftool — Metadata preservation, EXIF handling, GPS/camera information
 
 ## 7. PhotoPrism
 
-https://github.com/photoprism/photoprism
-
-**Ideas**
-
-- Media indexing
-- Search
-- Duplicate detection
-- Metadata architecture
-
----
+https://github.com/photoprism/photoprism — Media indexing, metadata architecture
 
 ## 8. Immich
 
-https://github.com/immich-app/immich
-
-**Ideas**
-
-- Background workers
-- Job queues
-- Storage management
-- UI inspiration
-- Scalable architecture
-
----
+https://github.com/immich-app/immich — Background workers, job queues, storage management, UI inspiration, scalable architecture
 
 ## 9. LibrePhotos
 
-https://github.com/LibrePhotos/librephotos
-
-**Ideas**
-
-- Duplicate detection
-- Face recognition
-- Media organization
-
----
+https://github.com/LibrePhotos/librephotos — Media organization ideas
 
 ## 10. digiKam
 
-https://github.com/KDE/digikam
-
-**Ideas**
-
-- Album management
-- Metadata editing
-- Professional media workflows
-
----
+https://github.com/KDE/digikam — Album management, metadata editing, professional media workflows
 
 ## 11. darktable
 
-https://github.com/darktable-org/darktable
-
-**Ideas**
-
-- RAW image pipeline
-- High-performance image processing
-
----
+https://github.com/darktable-org/darktable — RAW image pipeline, high-performance image processing
 
 ## 12. ExifCleaner
 
-https://github.com/szTheory/exifcleaner
-
-**Ideas**
-
-- Cross-platform desktop application
-- Metadata workflow
+https://github.com/szTheory/exifcleaner — Cross-platform desktop application, metadata workflow
 
 ---
 
@@ -414,12 +357,14 @@ https://github.com/szTheory/exifcleaner
 - PHAsset
 - PHAssetResource
 - PHImageManager
+- PHAssetCreationRequest / PHAssetChangeRequest (create-new + delete-old workflow)
 
 ## Images
 
 - ImageIO
 - Core Image
 - Core Graphics
+- CGImageMetadata (metadata)
 
 ## Videos
 
@@ -431,66 +376,69 @@ https://github.com/szTheory/exifcleaner
 
 ---
 
-# Stretch Goals
-
-- AI-powered quality estimation
-- Duplicate detection
-- Near-duplicate detection
-- Blur detection
-- Screenshot cleanup
-- WhatsApp media cleanup
-- Batch scheduling
-- Automatic recommendations (e.g. "Save 75 GB")
-- NAS support
-- Immich integration
-- Plugin system
-- Command Line Interface (CLI)
-- REST API
-- Homebrew package
-
----
-
-# Success Metrics
-
-- Reduce library size by **30% to 70%** for libraries with significant JPEG / H.264 content (modern HEIC / HEVC libraries yield less); the actual estimate is computed per-library from the real codec mix
-- Preserve visually indistinguishable quality
-- Zero data loss
-- Fully offline operation
-- Support libraries containing **100,000+ assets**
-- Become the go-to open source storage optimization tool for Apple Photos
-
----
-
 # Potential Future Roadmap
 
 ## Phase 1
 
 - Photos library scanning
-- Storage analytics
+- Storage analytics + codec breakdown
 - Compression estimation
-- Batch photo compression
+- Batch photo compression (non-destructive export first, to prove the engine)
 
 ## Phase 2
 
 - Video compression
-- Metadata preservation
+- Metadata preservation + re-attachment
 - Hardware acceleration
-- Preview interface
+- Batch-summary preview interface
 
 ## Phase 3
 
-- Safe replacement workflow
-- Rollback support
-- Background processing
-- Resume interrupted jobs
+- Safe replacement workflow (create-new + delete-old) with verification gate
+- 30-day undo + optional external archive
+- Background processing, progress/pause/cancel
+- Resume interrupted jobs (atomic + journal)
 
 ## Phase 4
 
-- AI-assisted optimization
-- Duplicate detection
-- CLI
-- Plugin ecosystem
-- Community contributions
+- iCloud-aware handling (download-on-demand originals; sync-safe deletes)
+- CLI over the same engine
+
+---
+
+# Near-term Stretch Goals
+
+- Command Line Interface (CLI) over the same core engine
+- Homebrew package
+
+---
+
+# Ideas / Maybe Later (unranked, not committed)
+
+These are deliberately parked outside the roadmap until the compression core is proven and demand is real:
+
+- AI-powered quality estimation
+- Duplicate / near-duplicate detection
+- Blur detection
+- Screenshot cleanup
+- WhatsApp media cleanup
+- Automatic recommendations (e.g. "Save 75 GB")
+- NAS support
+- Immich integration
+- Plugin system
+- REST API
+- iOS companion app
+
+---
+
+# Success Metrics
+
+- Reduce local library size by **30% to 70%** for libraries with significant JPEG / H.264 content (modern HEIC / HEVC libraries yield less); the actual estimate is computed per-library from the real codec mix
+- Preserve visually indistinguishable quality (verified against a measurable quality floor at the Verification step)
+- **Never delete a user's only copy without explicit consent;** the quality trade-off is opt-in and shown before committing
+- All processing local; no third-party uploads
+- Support libraries containing **100,000+ assets**
+- Become the go-to open source, Photos-native storage optimization tool for Apple Photos on macOS
 
 ---
 
@@ -500,47 +448,51 @@ The goal of **iShrink** is to become for Apple Photos what projects like **Immic
 
 ---
 
-# Deferred / Open Questions
+# Resolved Decisions
 
-### From 2026-07-24 review
+### From 2026-07-24 review walk-through
 
-These findings need a human decision (architecture, product, or scope judgment) and were surfaced by the document review rather than auto-applied. Resolve before or during planning.
+The 20 open questions from the document review were resolved as follows. Items marked *(spike)* need a technical proof before the relevant phase.
 
-**Core data-safety architecture (resolve #1 first — the rest depend on it):**
+**Core data-safety architecture**
 
-1. **[P0] PhotoKit has no in-place original replacement.** (Architecture / Vision) The core "safely replace originals" workflow assumes a capability PhotoKit does not offer — the only path is export → encode → create new asset → delete old asset. Decide and document the concrete substitution mechanism, and validate it with a throwaway spike before Phase 3.
-   - **[P1] (depends on #1) Delete-and-reimport loses library metadata.** (Metadata Preservation) A re-imported asset is a new `PHAsset`, so album membership, faces/people, Memories, and Live Photo pairing are lost with no API to restore them. Decide which losses are acceptable and how pairing/albums are reconstructed.
-2. **[P0] "Zero data loss" + "safe rollback" conflict with reclaiming space.** (Success Metrics / NFR) Rollback needs the original kept; keeping it saves no space; once purged, rollback is impossible. Define the reversibility window explicitly and require informed acknowledgement before any deletion that empties the rollback path.
-3. **[P0] "100% offline" breaks under iCloud "Optimize Mac Storage."** (NFR / Goals) Full originals may live only in iCloud; re-encoding requires downloading them. Decide whether v1 requires originals present locally, or soften the offline claim to cover download-on-demand.
-4. **[P0] iCloud delete+reimport propagates across devices.** (Target Users / Architecture) Deletions sync to all devices and compressed copies re-upload, so iCloud usage can rise before it falls. Model the sync side effects (warn when iCloud is on, sequence deletes after upload confirmation, or recommend disabling sync during a run).
-5. **[P0] No selection model for which assets get compressed.** (Compression Engine / Scanner) Undefined whether compression targets the whole library, a subset, albums, or only large files. Add an explicit selection + confirm step before any job runs.
-6. **[P0] No failure/error handling for a large batch.** (Architecture / Compression Engine) Corrupt, unsupported, or partially-processed files across 100k+ assets need a per-item policy (skip-and-log, never touch the original, never clean up an item that failed verification).
+1. **Replacement model:** add-new-then-delete-old (the only PhotoKit path that reclaims space), with safety rails; validate with a throwaway spike before Phase 3. *(spike)*
+2. **Reversibility:** rely on the system's 30-day Recently Deleted window for undo, offer an optional external-drive archive for permanent rollback, and reword "zero data loss" honestly.
+3. **Offline / iCloud reads:** v1 processes only locally-present originals; iCloud download-on-demand deferred to Phase 4.
+4. **iCloud sync writes:** v1 assumes a non-iCloud library — detect iCloud Photos and gate/warn; full iCloud handling deferred.
+5. **Selection:** flexible multi-mode (smart default + manual + filters), always ending in a mandatory confirmation screen.
+6. **Failure handling:** per-item skip-log-keep (never delete a failed item's original), with one auto-retry for transient errors.
 
-**Product & positioning:**
+**Product & positioning**
 
-7. **[P1] Primary user (iPhone-only) can't use a Mac-only app.** (Target Users / NFR) State the real prerequisite (a Mac with the library accessible) and reframe the primary persona accordingly.
-8. **[P1] Ambiguous whether the tool reduces local disk vs iCloud storage.** (Vision / Goals) The two imply different workflows and success metrics — commit to which storage the tool reduces.
-9. **[P2] Seven unprioritized target segments; "Photographers" contradicts lossy compression.** (Target Users) Designate one primary persona and state the fidelity-vs-savings trade-off rule; exclude RAW/ProRAW from default compression.
-10. **[P2] "No mature open-source project" premise is unproven.** (Problem Statement / Vision) CompressO is listed as prior art. Add a short competitive/gap analysis naming the closest tools and the precise remaining gap.
+7. **Primary persona:** reframed to Mac users managing a large Apple Photos library; iPhone-only users moved to future/aspirational.
+8. **Storage target:** v1 reduces the Mac's local disk footprint; iCloud-plan savings staged for a later phase.
+9. **Personas & trade-off rule:** pruned to one primary persona + "preserve originals when in doubt (exclude RAW/ProRAW/ProRes by default)"; Photographers dropped as a primary segment.
+10. **Prior-art claim:** reframed from "no mature OSS exists" to the precise gap — no OSS tool does Photos-native safe compression + replacement.
 
-**Media handling:**
+**Media handling**
 
-11. **[P1] Special media detected but no compression policy.** (Scanner / Compression Engine) RAW/ProRAW, ProRes, Live Photos, HDR, and Cinematic are detected but the engine only defines JPEG/PNG→HEIC and H.264→HEVC. Define a per-type default (e.g., RAW/ProRAW and ProRes excluded by default; Live Photos re-encode both paired resources while preserving pairing).
+11. **Special media:** conservative per-type policy — protect RAW/ProRAW/ProRes/Cinematic (opt-in only); handle Live Photos with preserved pairing; preserve HDR.
 
-**UX & operations:**
+**UX & operations**
 
-12. **[P1] Preview interface has no interaction model.** (Preview) Define per-asset vs. batch review and the comparison affordance (slider/toggle/split-pane) for a 100k-asset library.
-13. **[P1] Resumable jobs lack resume UI and per-asset atomicity.** (NFR / Roadmap) Define the interruption/resume flow and make each asset an atomic transaction so a crash never leaves a half-replaced asset.
-14. **[P1] No progress/pause/cancel state for long-running jobs.** (NFR) Define a persistent progress UI (items done/total, current file, ETA) with pause and cancel.
-15. **[P1] No PhotoKit permission handling.** (Apple Frameworks) Define the first-run permission prompt, a denied/limited-access empty state, and behavior when access is revoked mid-job.
+12. **Preview:** batch summary as the decision surface (no per-asset compare in v1); safety is covered by verification + 30-day undo.
+13. **Resume & atomicity:** atomic per-asset transactions + durable journal + resume/discard prompt.
+14. **Progress:** full progress UI with safe pause and cancel at item boundaries.
+15. **Permissions:** full first-run permission lifecycle (pre-prompt, denied state, limited access, mid-job revocation).
 
-**Security & distribution:**
+**Security & distribution**
 
-16. **[P1] Bundled binaries lack sandboxing and supply-chain integrity.** (Tech Stack / Compression) FFmpeg/libheif/ImageMagick/ExifTool parse untrusted media and have CVE histories. Define subprocess sandboxing, pinned/verified builds, and a CVE-update cadence.
-17. **[P2] FFmpeg (GPL) + ExifTool subprocess vs App Sandbox / App Store.** (Tech Stack / Metadata) Distribution model (App Store vs notarized direct download) determines whether the toolchain is even permitted. Decide it early — it may force ImageIO/AVFoundation substitutions.
-18. **[P2] No temp-disk budget for a 100k-asset export.** (NFR / Success Metrics) Exporting full-res originals before compressing can fill the drive the tool is meant to free. Define the concurrency/temp-space/streaming/cleanup model.
+16. **Toolchain security:** prefer native Apple frameworks; sandbox + pin + patch any remaining third-party binary.
+17. **Distribution:** notarized direct download + Homebrew for v1; App Store possible later.
+18. **Temp disk:** bounded streaming pipeline with adaptive batch sizing, immediate cleanup, and a live free-space guardrail.
 
-**Scope:**
+**Scope**
 
-19. **[P2] Curation/dedup features serve a different goal.** (Stretch Goals / Roadmap) Duplicate/near-duplicate/blur/screenshot/WhatsApp cleanup is content curation, not compression, yet duplicate detection is committed into Phase 4. Move these out of the phased roadmap into an unranked idea list.
-20. **[P2] Extensibility and cross-library features exceed the stated Apple Photos scope.** (Stretch Goals / Roadmap) Plugin system, CLI, REST API (no current consumer) and NAS support / Immich integration (outside Apple Photos) should be dropped from the roadmap or given their own goal statements before being planned.
+19. **Curation/dedup:** moved entirely to the Ideas list (out of the roadmap).
+20. **Extensibility:** plugin system / REST API / NAS / Immich moved to Ideas; CLI kept as a near-term stretch over the same engine.
+
+## Open follow-ups
+
+- **Spike (Q1):** verify the create-new + delete-old workflow preserves date/location/favorite/album/Live-pairing on the new asset, before Phase 3.
+- **Validate savings:** measure realistic savings on a modern (already-HEIC/HEVC) library to confirm the 30–70% framing before making it a headline.
