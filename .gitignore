@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Xcode / Swift (for when the app code lands)
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+Package.resolved
+
+# Editors
+.vscode/
+.idea/
+*.swp
