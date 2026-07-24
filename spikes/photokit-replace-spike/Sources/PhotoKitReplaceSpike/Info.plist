@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>iShrink spike: verifies whether creation date, location, favorite status, album membership, and Live Photo pairing survive a create-new-then-delete-old PhotoKit workflow. Only creates and deletes its own synthetic test assets.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>iShrink spike needs to add a synthetic test photo to verify the replace workflow.</string>
+</dict>
+</plist>

@@ -3,6 +3,7 @@
 
 # Xcode / Swift (for when the app code lands)
 build/
+.build/
 DerivedData/
 *.xcuserstate
 xcuserdata/
