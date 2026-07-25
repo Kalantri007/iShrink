@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+
+	<!-- macOS App Sandbox entitlement required to access the Photos library. -->
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+
+	<!--
+	  Deliberately NO com.apple.security.network.client (or any other network
+	  entitlement) here. Plan Key Technical Decisions: "App Sandbox enabled
+	  with no network entitlement" — R13 ("all processing is local; nothing
+	  is uploaded or transmitted") is enforced by the OS sandbox denying
+	  outbound network access by default, not merely by the absence of
+	  network code in the app/iShrinkCore. Do not add a network entitlement
+	  in Phase 1.
+	-->
+</dict>
+</plist>
