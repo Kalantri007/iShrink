@@ -1,19 +1,22 @@
 import Foundation
 
-// iShrink Phase 1 plan, U5 "Savings estimator" — Tier 1 (heuristic) only.
+// iShrink Phase 1 plan, U5 "Savings estimator" — both tiers.
 //
 // Tier 1 projects a realistic post-compression size/savings range from the
 // real codec mix using a default expected-ratio table by source codec,
 // applied to *compressible* bytes only. It is pure math over injected
-// ratios — no PhotoKit, no `ImageCompressor` (which doesn't exist yet; U6
-// builds it). Tier 2 (calibration, needs U6) will re-project using a
-// *measured* ratio from a small compressed sample instead of this
-// heuristic table — see the doc comments below on why `estimate(...)` takes
-// ratios as a parameter rather than baking them into stored state, and why
-// `defaultRatios` is `public` rather than `private`: both are the seams
-// Tier 2 needs, deliberately left open now (plan: "Module dependency build
-// order ... `SavingsEstimator` (heuristic tier) → ... → `SavingsEstimator`
-// (calibration tier, needs the compressor)").
+// ratios — no PhotoKit, no `ImageCompressor` involved. Tier 2 (calibration,
+// needs U6, see `calibrate(sample:compressor:destinationDirectory:)` below)
+// re-projects using a *measured* ratio from a small compressed sample
+// instead of this heuristic table — see the doc comments below on why
+// `estimate(...)` takes ratios as a parameter rather than baking them into
+// stored state, and why `defaultRatios` is `public` rather than `private`:
+// both are the seams Tier 2 needs, deliberately left open in Tier 1 (plan:
+// "Module dependency build order ... `SavingsEstimator` (heuristic tier)
+// → ... → `SavingsEstimator` (calibration tier, needs the compressor)").
+// Tier 2 is a pure additive extension of this same file: `estimate`'s
+// signature is untouched, and `calibrate` only ever produces a ratio table
+// that gets passed into it.
 //
 // Input shape note (design decision / minor gap filled here, not in
 // `StorageAnalytics`): U5 needs per-*codec* *compressible* bytes to apply
@@ -171,5 +174,90 @@ public enum SavingsEstimator {
 
     private static func projected(bytes: Int64, ratio: Double) -> Int64 {
         Int64((Double(bytes) * ratio).rounded())
+    }
+
+    // MARK: - Tier 2: calibration (needs U6's `ImageCompressor`)
+
+    /// Builds a *measured* ratio table from a small representative sample,
+    /// by actually compressing each sample item via the given
+    /// `ImageCompressor` (plan Approach, U5 Tier 2: "compress a small
+    /// representative sample ... via `ImageCompressor` to the app-private
+    /// temp dir, measure the actual ratio, and re-project").
+    ///
+    /// This is a pure additive extension: it does not touch `estimate`'s
+    /// signature at all. The caller is expected to pass this function's
+    /// return value as the `ratios:` argument to `estimate(...)` in place of
+    /// `defaultRatios` — proving Tier 1's extensibility claim (this file's
+    /// header comment: "both are the seams Tier 2 needs, deliberately left
+    /// open now") actually holds, rather than requiring `estimate` itself to
+    /// grow a calibration-specific code path.
+    ///
+    /// - Parameters:
+    ///   - sample: a small set of already-classified, compressible assets
+    ///     paired with a real source file URL each (the caller — a later
+    ///     UI/reporting unit — is responsible for picking the sample, e.g.
+    ///     "N largest-plus-random JPEGs", and for resolving each asset's
+    ///     `localIdentifier` to an on-disk source URL; that resolution is
+    ///     out of scope here, same as `estimate`'s existing "caller
+    ///     assembles the input shape" design).
+    ///   - compressor: the `ImageCompressor` to run each sample item
+    ///     through. Callers should point its `tempDirectory` (and the
+    ///     `destinationDirectory` passed here) at app-private scratch
+    ///     locations, never the user's real destination folder — calibration
+    ///     output is a throwaway measurement, not a real compression run.
+    ///   - destinationDirectory: where each sample item's compressed output
+    ///     temporarily lands so its size can be measured. A scratch
+    ///     directory, not the user's chosen destination.
+    /// - Returns: a `[MediaCodec: RatioRange]` built only from codecs that
+    ///   had at least one successful compression in the sample. A codec with
+    ///   zero successful samples (every attempt failed, or none were
+    ///   included) is simply absent from the result — `estimate` already
+    ///   treats a missing codec as "no known ratio, assume no savings" for
+    ///   Tier 1, and that same honest fallback applies here rather than this
+    ///   function fabricating a ratio for a codec it never actually
+    ///   measured.
+    ///
+    /// **Range design:** when a codec has multiple successful samples, the
+    /// returned `RatioRange.low`/`.high` are the **min/max observed ratio**
+    /// for that codec — an honest empirical spread — rather than an average
+    /// (which would hide how much the measured ratio actually varied across
+    /// the sample) or a fabricated hand-picked spread (Tier 1's heuristic
+    /// table). When a codec has exactly one successful sample, `low == high`
+    /// falls out of `min == max` naturally — the same degenerate-range shape
+    /// as `RatioRange.fixed(_:)`, with no special-casing needed.
+    public static func calibrate(
+        sample: [(asset: ClassifiedAsset, sourceURL: URL)],
+        compressor: ImageCompressor,
+        destinationDirectory: URL
+    ) -> [MediaCodec: RatioRange] {
+        var measuredRatiosByCodec: [MediaCodec: [Double]] = [:]
+
+        for item in sample {
+            guard case .success(let result) = compressor.compress(
+                sourceURL: item.sourceURL,
+                localIdentifier: item.asset.record.localIdentifier,
+                destinationDirectory: destinationDirectory
+            ) else {
+                // A bad sample file (e.g. corrupt/unreadable) shouldn't
+                // crash — or skew — the whole calibration batch. Skip this
+                // item's contribution and keep going with the rest.
+                continue
+            }
+
+            guard result.inputByteSize > 0 else {
+                // Defensive: a zero-byte source would make the ratio
+                // meaningless (and, if it were ever the divisor, a
+                // divide-by-zero). Not expected in practice, but skip it
+                // rather than let it corrupt the codec's ratio.
+                continue
+            }
+
+            let measuredRatio = Double(result.outputByteSize) / Double(result.inputByteSize)
+            measuredRatiosByCodec[item.asset.codec, default: []].append(measuredRatio)
+        }
+
+        return measuredRatiosByCodec.mapValues { ratios in
+            RatioRange(low: ratios.min() ?? 0, high: ratios.max() ?? 0)
+        }
     }
 }
