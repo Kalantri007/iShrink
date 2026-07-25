@@ -41,6 +41,10 @@ struct RootView: View {
                 SelectionView(appModel: appModel)
             case .confirmation:
                 ConfirmationView(appModel: appModel)
+            case .running:
+                CompressionRunView(appModel: appModel)
+            case .report:
+                ReportView(appModel: appModel)
             }
         }
         .frame(minWidth: 480, minHeight: 360)

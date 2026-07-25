@@ -7,8 +7,9 @@ import iShrinkCore
 // savings for the **selected subset** (via `SelectionRules.
 // confirmationSummary`, never the whole-library number from the analytics
 // screen), and the output-folder picker. Nothing runs until the user picks
-// a destination and confirms — the "Start Compression" action itself is a
-// stub here; wiring it to `CompressionPipeline` is U9's job.
+// a destination and confirms — "Start Compression" calls
+// `AppModel.startCompressionFlow()` (U9), which checks for a resumable
+// prior run before handing off to `CompressionRunView`.
 //
 // Destination validation is delegated entirely to `DestinationValidator`
 // (Core, unit-tested): a rejected (unwritable) destination blocks Start
@@ -40,8 +41,7 @@ struct ConfirmationView: View {
                 Spacer()
                 if !appModel.selection.isEmpty {
                     Button("Start Compression") {
-                        // U9's territory: wiring this to
-                        // `CompressionPipeline` and `CompressionRunView`.
+                        appModel.startCompressionFlow()
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!appModel.canStartCompression)

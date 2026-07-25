@@ -1,19 +1,26 @@
 import Foundation
 import SwiftUI
 import AppKit
+import CryptoKit
 import iShrinkCore
 
 // iShrink Phase 1 plan, U8 "App UI: permission → scan → analytics →
-// selection → confirmation".
+// selection → confirmation" (original five stages), extended by U9 "App
+// UI: compression run & report" with two more (`.running`/`.report`).
 //
-// `@MainActor` observable app state tying the five U8 screens together.
+// `@MainActor` observable app state tying all seven screens together.
 // Kept intentionally thin (plan: "this is Phase 1 UI wiring, not a full
-// app; don't over-build navigation infrastructure beyond what these 5
+// app; don't over-build navigation infrastructure beyond what these
 // screens need") — a single linear `Stage` enum plus one modal flag for the
 // iCloud first-run question, rather than a generic navigation stack/router.
-// U9's `CompressionRunView`/`ReportView` are out of scope here; the
-// "Start Compression" action on `ConfirmationView` is a stub this unit
-// leaves for U9 to wire to `CompressionPipeline`.
+//
+// U9 additions: `startCompressionFlow()` (called from `ConfirmationView`'s
+// Start button) wires the real `CompressionPipeline` (U7) to a real,
+// PhotoKit-backed `ItemCompressing` conformer (`PhotoKitItemCompressor`,
+// Core) and a durable `RunManifest`, with a Resume/Discard prompt when an
+// incomplete manifest already exists for the same selection+destination.
+// `CompressionRunView` renders the live run; `ReportView` renders the
+// `CompressionReport` built from the run's results once it ends.
 
 /// Persists the one-time "does this Mac have iCloud Photos enabled?" answer
 /// (R6 / plan "iCloud first-run question") behind a small injectable seam,
@@ -60,6 +67,8 @@ final class AppModel: ObservableObject {
         case analytics
         case selection
         case confirmation
+        case running
+        case report
     }
 
     @Published private(set) var stage: Stage
@@ -88,6 +97,48 @@ final class AppModel: ObservableObject {
     @Published var destinationURL: URL?
     @Published private(set) var destinationValidation: DestinationValidation?
     @Published var cloudSyncAcknowledged = false
+
+    // MARK: - Compression run & report (R9/R10/R11/R12, U9)
+
+    /// Live "items done/total, current file" state `CompressionRunView`
+    /// renders — built from `CompressionPipeline.run`'s new
+    /// `onItemStarted`/`onItemFinished` hooks (U9's additive extension to
+    /// U7's pipeline; neither hook carries byte data, only identity — see
+    /// `CompressionPipeline.swift`).
+    struct CompressionRunProgress: Equatable {
+        var itemsDone: Int
+        var itemsTotal: Int
+        var currentFilename: String?
+    }
+
+    /// Shown instead of silently re-running when an incomplete manifest is
+    /// found for the same selection+destination (plan: "present a Resume /
+    /// Discard prompt (items done/remaining) rather than silently
+    /// re-running").
+    struct ResumePrompt: Equatable {
+        var itemsDone: Int
+        var itemsRemaining: Int
+    }
+
+    @Published private(set) var runProgress: CompressionRunProgress?
+    @Published private(set) var pauseReason: PauseReason?
+    @Published var showCancelConfirmation = false
+    @Published private(set) var resumePrompt: ResumePrompt?
+    @Published private(set) var runningSavedBytes: Int64 = 0
+    @Published private(set) var runStartedAt: Date?
+    @Published private(set) var compressionReport: CompressionReport?
+
+    /// GPS export gating (R12): flipping this to `true` only ever happens
+    /// via `confirmIncludeGPSInExport()`, never directly — see that
+    /// method's doc comment.
+    @Published private(set) var gpsIncludedInExport = false
+    @Published var showGPSExportConfirmation = false
+
+    private var pipeline: CompressionPipeline?
+    private var runTask: Task<Void, Never>?
+    private var reportAccumulator: CompressionReportAccumulator?
+    private var runManifest: RunManifest?
+    private var pipelineItems: [PipelineItem] = []
 
     let authorization: PhotoAuthorization
     private let library: PhotoLibraryProviding
@@ -304,6 +355,342 @@ final class AppModel: ObservableObject {
             return false
         }
         return true
+    }
+
+    // MARK: - Starting a run (R9/R10/R11, U9)
+
+    /// `ConfirmationView`'s Start button calls this. Before running
+    /// anything, checks the durable manifest for the same selection +
+    /// destination pair for an *incomplete* prior run and, if one exists,
+    /// shows the Resume/Discard prompt instead of silently re-running (plan
+    /// "Resume affordance"). A fresh or already-fully-complete manifest
+    /// starts the run immediately.
+    func startCompressionFlow() {
+        guard let destinationURL, canStartCompression else { return }
+
+        let items = selection.map { asset in
+            PipelineItem(
+                localIdentifier: asset.record.localIdentifier,
+                sourceURL: Self.sourceStagingURL(
+                    for: asset.record.localIdentifier, in: Self.sourceStagingDirectory()
+                )
+            )
+        }
+        pipelineItems = items
+
+        let manifestStore = FileManifestStore(
+            directory: Self.manifestDirectory(destination: destinationURL, selection: selection)
+        )
+        let manifest = RunManifest(store: manifestStore)
+        runManifest = manifest
+        stage = .running
+        pauseReason = nil
+        runProgress = CompressionRunProgress(itemsDone: 0, itemsTotal: items.count, currentFilename: nil)
+
+        Task { [weak self] in
+            try? await manifest.load()
+            let doneCount = await manifest.completedCount
+            await MainActor.run {
+                guard let self else { return }
+                if doneCount > 0, doneCount < items.count {
+                    self.resumePrompt = ResumePrompt(itemsDone: doneCount, itemsRemaining: items.count - doneCount)
+                } else {
+                    self.resumePrompt = nil
+                    self.beginCompressionRun()
+                }
+            }
+        }
+    }
+
+    /// User chose "Resume" on the resume/discard prompt: proceed with the
+    /// existing (already-loaded) manifest, skipping items it already
+    /// recorded complete.
+    func resumeFromPrompt() {
+        resumePrompt = nil
+        beginCompressionRun()
+    }
+
+    /// User chose "Discard": abandon the prior run's recorded progress and
+    /// start over from zero. Clears the manifest's durable state first so a
+    /// fresh run doesn't just re-load the old completions on its own
+    /// `load()` call.
+    func discardAndRestartFromPrompt() {
+        resumePrompt = nil
+        guard let destinationURL else { return }
+        let directory = Self.manifestDirectory(destination: destinationURL, selection: selection)
+        try? FileManager.default.removeItem(at: directory)
+        runManifest = RunManifest(store: FileManifestStore(directory: directory))
+        beginCompressionRun()
+    }
+
+    /// Sets up the real `CompressionPipeline` (first call) and kicks off —
+    /// or resumes — the run task. Safe to call again after a pause: the
+    /// pipeline instance and manifest are reused, and `RunManifest`'s own
+    /// skip-if-complete logic means already-finished items aren't redone.
+    private func beginCompressionRun() {
+        guard let destinationURL, let runManifest else { return }
+        stage = .running
+        pauseReason = nil
+        runStartedAt = runStartedAt ?? Date()
+
+        let accumulator = reportAccumulator ?? CompressionReportAccumulator()
+        reportAccumulator = accumulator
+
+        let currentPipeline: CompressionPipeline
+        if let pipeline {
+            currentPipeline = pipeline
+        } else {
+            let tempDirectory = Self.sourceStagingDirectory()
+            let imageCompressor = ImageCompressor(tempDirectory: tempDirectory)
+            var assetInfo: [String: PhotoKitItemCompressor.AssetReportInfo] = [:]
+            for asset in selection {
+                assetInfo[asset.record.localIdentifier] = PhotoKitItemCompressor.AssetReportInfo(
+                    filename: asset.record.originalFilename ?? asset.record.localIdentifier,
+                    codec: asset.codec
+                )
+            }
+            let compressor = PhotoKitItemCompressor(
+                imageCompressor: imageCompressor,
+                destinationDirectory: destinationURL,
+                reportAccumulator: accumulator,
+                assetInfo: assetInfo
+            )
+            currentPipeline = CompressionPipeline(
+                compressor: compressor,
+                manifest: runManifest,
+                tempStore: TempStore(directory: tempDirectory),
+                freeSpaceGuard: FreeSpaceGuard(destinationURL: destinationURL, thresholdBytes: 500_000_000),
+                authorizationPolling: MainActorAuthorizationPolling(authorization: authorization),
+                destinationAvailability: FileManagerDestinationAvailability(url: destinationURL),
+                concurrencyWindow: CompressionPipeline.defaultConcurrencyWindow()
+            )
+            pipeline = currentPipeline
+        }
+
+        let items = pipelineItems
+        runTask = Task { [weak self] in
+            let result = await currentPipeline.run(
+                items: items,
+                onItemStarted: { item in
+                    Task { @MainActor in
+                        self?.runProgress?.currentFilename = item.sourceURL.lastPathComponent
+                    }
+                },
+                onItemFinished: { _, _ in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.runProgress?.itemsDone += 1
+                        let saved = await accumulator.allItems.reduce(0) { $0 + $1.savedBytes }
+                        self.runningSavedBytes = saved
+                    }
+                }
+            )
+            let succeededItems = await accumulator.allItems
+            await MainActor.run {
+                guard let self else { return }
+                self.runningSavedBytes = succeededItems.reduce(0) { $0 + $1.savedBytes }
+                self.handleRunResult(result, succeededItems: succeededItems)
+            }
+        }
+    }
+
+    private func handleRunResult(_ result: PipelineRunResult, succeededItems: [CompressionReportItem]) {
+        switch result.outcome {
+        case .completed, .cancelled:
+            let excludedCount = selection.filter { CompressionPolicy.evaluate($0) != .proceed }.count
+            compressionReport = CompressionReport(
+                succeededItems: succeededItems,
+                failures: result.failures,
+                excludedCount: excludedCount
+            )
+            pauseReason = nil
+            stage = .report
+        case .paused(let reason):
+            pauseReason = reason
+        case .setupError:
+            // No volume this OS can monitor free space on at all — a
+            // blocking condition the user must fix outside iShrink (e.g.
+            // choose a different destination volume); shown with the same
+            // "blocking" styling as `.destinationUnavailable`.
+            pauseReason = .destinationUnavailable
+        }
+    }
+
+    // MARK: - Pause / Cancel / Resume mid-run (R11)
+
+    func pauseCompression() {
+        guard let pipeline else { return }
+        Task { await pipeline.requestPause() }
+    }
+
+    /// Cancel requires a confirmation before it actually stops anything
+    /// (plan: "so an accidental click doesn't silently abort a long run").
+    func requestCancelCompression() {
+        showCancelConfirmation = true
+    }
+
+    func confirmCancelCompression() {
+        showCancelConfirmation = false
+        guard let pipeline else { return }
+        Task { await pipeline.requestCancel() }
+    }
+
+    func dismissCancelConfirmation() {
+        showCancelConfirmation = false
+    }
+
+    /// "Resume" after a pause (any `PauseReason`, once its remediation is
+    /// done — re-granting access, freeing space, reconnecting a volume):
+    /// re-invokes the same pipeline instance, which skips everything the
+    /// manifest already recorded complete.
+    func resumeAfterPause() {
+        guard pipeline != nil else { return }
+        beginCompressionRun()
+    }
+
+    // MARK: - Report (R12)
+
+    /// Whether GPS coordinates are currently included when the report is
+    /// exported. Never settable directly — only via
+    /// `confirmIncludeGPSInExport()` (plan: "enabling GPS inclusion
+    /// requires an explicit confirmation ... not a bare toggle").
+    func requestIncludeGPSInExport() {
+        showGPSExportConfirmation = true
+    }
+
+    func confirmIncludeGPSInExport() {
+        gpsIncludedInExport = true
+        showGPSExportConfirmation = false
+    }
+
+    func cancelIncludeGPSInExportRequest() {
+        showGPSExportConfirmation = false
+    }
+
+    func excludeGPSFromExport() {
+        gpsIncludedInExport = false
+    }
+
+    /// The report rendered as exported text, honoring the current GPS
+    /// inclusion setting (`redactGPS` defaults to `true` in
+    /// `CompressionReport.exportText`; this only ever passes `false` after
+    /// the explicit confirmation above).
+    var exportedReportText: String? {
+        compressionReport?.exportText(redactGPS: !gpsIncludedInExport)
+    }
+
+    func revealOutputInFinder() {
+        guard let destinationURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+    }
+
+    /// Post-report "start another selection" action: back to `SelectionView`
+    /// with a clean run/report state, keeping the same scanned library
+    /// (no need to re-scan for a second compression pass in the same
+    /// session).
+    func startAnotherSelectionAfterReport() {
+        compressionReport = nil
+        gpsIncludedInExport = false
+        showGPSExportConfirmation = false
+        pipeline = nil
+        runTask?.cancel()
+        runTask = nil
+        runManifest = nil
+        reportAccumulator = nil
+        pipelineItems = []
+        runProgress = nil
+        pauseReason = nil
+        runStartedAt = nil
+        runningSavedBytes = 0
+        destinationURL = nil
+        destinationValidation = nil
+        cloudSyncAcknowledged = false
+        stage = .selection
+        updateSelection()
+    }
+
+    // MARK: - App-private locations (mirrors U6/U7's injectable-directory pattern)
+
+    private static func appSupportDirectory() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("iShrink", isDirectory: true)
+    }
+
+    /// The single app-private temp directory used for *both* `ImageCompressor`'s
+    /// in-progress `.heic` encode (U6) and each selected asset's freshly-
+    /// exported source staging file (`PhotoKitItemCompressor`, U9) — the
+    /// same directory `TempStore.sweepOrphans()` clears at the start of
+    /// every run. Deliberately **not** two separate directories: a crash
+    /// between "export this asset's source bytes" and the per-item cleanup
+    /// `PhotoKitItemCompressor.compress`'s `defer` normally performs would
+    /// otherwise leave an unredacted-GPS/EXIF source copy in a directory
+    /// nothing ever sweeps (Key Technical Decisions: "Orphaned temp copy
+    /// with GPS/EXIF survives a crash" → "App-private temp location +
+    /// startup orphan sweep" — that mitigation only holds if every
+    /// GPS-bearing working copy actually lives under the one directory
+    /// `TempStore` sweeps).
+    private static func sourceStagingDirectory() -> URL {
+        appSupportDirectory().appendingPathComponent("tmp", isDirectory: true)
+    }
+
+    /// Reuses `TempStore`'s collision-safe, filesystem-safe naming
+    /// (`localIdentifier` contains `/`, which isn't filesystem-safe on its
+    /// own — same reasoning as `ImageCompressor`'s own output naming)
+    /// rather than re-deriving the same sanitization here.
+    private static func sourceStagingURL(for localIdentifier: String, in directory: URL) -> URL {
+        TempStore(directory: directory).tempURL(for: localIdentifier)
+    }
+
+    /// A stable (across relaunches) directory for this exact selection +
+    /// destination pair's run manifest, so the resume-affordance check in
+    /// `startCompressionFlow()` can find a prior incomplete run for the
+    /// *same* selection+destination — and only that combination, not some
+    /// unrelated previous run. Built from a SHA-256 of the sorted selected
+    /// `localIdentifier`s plus the destination path, rather than the
+    /// selection's `Array` order (which isn't guaranteed stable) or its
+    /// count alone (which doesn't identify *which* items).
+    private static func manifestDirectory(destination: URL, selection: [ClassifiedAsset]) -> URL {
+        let sortedIdentifiers = selection.map(\.record.localIdentifier).sorted().joined(separator: "\n")
+        let combined = destination.standardizedFileURL.path + "\n" + sortedIdentifiers
+        let digest = SHA256.hash(data: Data(combined.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return appSupportDirectory().appendingPathComponent("manifests", isDirectory: true)
+            .appendingPathComponent(hex, isDirectory: true)
+    }
+}
+
+/// Bridges the `@MainActor`-isolated `PhotoAuthorization` (Core, U2) into
+/// `CompressionPipeline`'s `AuthorizationPolling` seam (Core, U7), which
+/// requires a `Sendable` conformer. `PhotoAuthorization` itself isn't
+/// `Sendable` (it's a plain `@MainActor` class, not meant to be shared
+/// across isolation domains directly) — `@unchecked Sendable` here is safe
+/// because every actual access to it happens via `await poll()`, which
+/// Swift hops onto the main actor to perform; this wrapper holds the
+/// reference but never touches its state off that actor.
+private final class MainActorAuthorizationPolling: AuthorizationPolling, @unchecked Sendable {
+    private let authorization: PhotoAuthorization
+
+    init(authorization: PhotoAuthorization) {
+        self.authorization = authorization
+    }
+
+    func poll() async -> AuthPollResult {
+        await authorization.poll()
+    }
+}
+
+/// Real `DestinationAvailabilityChecking` conformer (Core, U7's seam):
+/// treats the destination as unavailable the moment it's no longer present
+/// at its path (e.g. an external/network volume was unmounted mid-run) —
+/// the structural, whole-run condition `PauseReason.destinationUnavailable`
+/// exists for (Core System-Wide Impact: distinct from any single item's own
+/// encode failure).
+private struct FileManagerDestinationAvailability: DestinationAvailabilityChecking {
+    let url: URL
+
+    func isAvailable() -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
     }
 }
 

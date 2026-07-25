@@ -12,14 +12,17 @@
 		15E6FFA3F95AB3FD2834B62E /* iShrinkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70EFF3BF1D35835DBB4E7050 /* iShrinkApp.swift */; };
 		2928B8B0F25D47480C125E2F /* ScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2573BF9AC4477449115567 /* ScanView.swift */; };
 		5BDFECCE5CBD34A65C4B42F6 /* ConfirmationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E86B9FC798F6E146AA8E3BC9 /* ConfirmationView.swift */; };
+		618F0FEC6D30A4A702E41CF2 /* CompressionRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E479A35DFA4816015B1CC44 /* CompressionRunView.swift */; };
 		6C671BF7428B340FAA44E834 /* iShrinkCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBA687B47568AA8507B9583 /* iShrinkCore */; };
 		92131249669B85A17FD27D32 /* SelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3309F6191378613FA9AA4BF7 /* SelectionView.swift */; };
 		E18D76A17F94C18735EB5AEE /* PermissionGateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E822D0353436F32BD5004A0 /* PermissionGateView.swift */; };
+		F0D9A3A6776DFA42E09C917A /* ReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCDE98F9C22D5D6E44EBD9FB /* ReportView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		3309F6191378613FA9AA4BF7 /* SelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionView.swift; sourceTree = "<group>"; };
 		3EB0B32959951133826902FA /* Core */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Core; path = Core; sourceTree = SOURCE_ROOT; };
+		5E479A35DFA4816015B1CC44 /* CompressionRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressionRunView.swift; sourceTree = "<group>"; };
 		5E822D0353436F32BD5004A0 /* PermissionGateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionGateView.swift; sourceTree = "<group>"; };
 		6F2573BF9AC4477449115567 /* ScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanView.swift; sourceTree = "<group>"; };
 		70EFF3BF1D35835DBB4E7050 /* iShrinkApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = iShrinkApp.swift; sourceTree = "<group>"; };
@@ -27,6 +30,7 @@
 		87AFC4841B195237940D7714 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		9B3987DE0D6DC39ADEB9C817 /* AnalyticsDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDashboardView.swift; sourceTree = "<group>"; };
 		E86B9FC798F6E146AA8E3BC9 /* ConfirmationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmationView.swift; sourceTree = "<group>"; };
+		FCDE98F9C22D5D6E44EBD9FB /* ReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,8 +49,10 @@
 			isa = PBXGroup;
 			children = (
 				9B3987DE0D6DC39ADEB9C817 /* AnalyticsDashboardView.swift */,
+				5E479A35DFA4816015B1CC44 /* CompressionRunView.swift */,
 				E86B9FC798F6E146AA8E3BC9 /* ConfirmationView.swift */,
 				5E822D0353436F32BD5004A0 /* PermissionGateView.swift */,
+				FCDE98F9C22D5D6E44EBD9FB /* ReportView.swift */,
 				6F2573BF9AC4477449115567 /* ScanView.swift */,
 				3309F6191378613FA9AA4BF7 /* SelectionView.swift */,
 			);
@@ -161,8 +167,10 @@
 			files = (
 				099B46A1E5C7BBF37D438462 /* AnalyticsDashboardView.swift in Sources */,
 				05EB5265DDC29544AE284F5F /* AppModel.swift in Sources */,
+				618F0FEC6D30A4A702E41CF2 /* CompressionRunView.swift in Sources */,
 				5BDFECCE5CBD34A65C4B42F6 /* ConfirmationView.swift in Sources */,
 				E18D76A17F94C18735EB5AEE /* PermissionGateView.swift in Sources */,
+				F0D9A3A6776DFA42E09C917A /* ReportView.swift in Sources */,
 				2928B8B0F25D47480C125E2F /* ScanView.swift in Sources */,
 				92131249669B85A17FD27D32 /* SelectionView.swift in Sources */,
 				15E6FFA3F95AB3FD2834B62E /* iShrinkApp.swift in Sources */,

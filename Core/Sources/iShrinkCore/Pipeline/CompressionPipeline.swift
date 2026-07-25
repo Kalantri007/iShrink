@@ -285,7 +285,22 @@ public actor CompressionPipeline {
     ///   a permanent one does not. Either way, one item's failure never
     ///   halts the batch — it's recorded in `failureLog` and the next item
     ///   proceeds.
-    public func run(items: [PipelineItem]) async -> PipelineRunResult {
+    ///
+    /// - Parameters:
+    ///   - onItemStarted/onItemFinished: optional, additive progress hooks
+    ///     (U9's `CompressionRunView` needs "items done/total, current
+    ///     file" — mirrors `LibraryScanner`'s own `onRecord`/`onProgress`
+    ///     callback shape, U3). Both default to `nil` so every pre-U9 call
+    ///     site and test keeps compiling unchanged; neither callback
+    ///     carries byte-size/codec data — that's the report accumulator's
+    ///     job (a real `ItemCompressing` conformer records it directly at
+    ///     success time, since only it has a `CompressionResult` to read
+    ///     from), not this pipeline's.
+    public func run(
+        items: [PipelineItem],
+        onItemStarted: (@Sendable (PipelineItem) -> Void)? = nil,
+        onItemFinished: (@Sendable (PipelineItem, ItemCompressionOutcome) -> Void)? = nil
+    ) async -> PipelineRunResult {
         pauseRequested = false
         cancelRequested = false
 
@@ -345,7 +360,9 @@ public actor CompressionPipeline {
                 }
                 let item = queue[cursor]
                 cursor += 1
-                group.addTask { await self.processItem(item) }
+                group.addTask {
+                    await self.processItem(item, onItemStarted: onItemStarted, onItemFinished: onItemFinished)
+                }
                 return true
             }
 
@@ -378,25 +395,37 @@ public actor CompressionPipeline {
 
     // MARK: - Per-item processing
 
-    private func processItem(_ item: PipelineItem) async {
+    private func processItem(
+        _ item: PipelineItem,
+        onItemStarted: (@Sendable (PipelineItem) -> Void)?,
+        onItemFinished: (@Sendable (PipelineItem, ItemCompressionOutcome) -> Void)?
+    ) async {
+        onItemStarted?(item)
+
+        let finalOutcome: ItemCompressionOutcome
         let firstAttempt = await compressor.compress(item)
         switch firstAttempt {
         case .success(let success):
             await recordSuccess(item: item, success: success)
+            finalOutcome = firstAttempt
         case .failure(let reason):
             if reason.isTransient {
                 let retryAttempt = await compressor.compress(item)
                 switch retryAttempt {
                 case .success(let success):
                     await recordSuccess(item: item, success: success)
+                    finalOutcome = retryAttempt
                 case .failure(let retryReason):
                     recordFailure(item: item, reason: retryReason, wasRetried: true)
+                    finalOutcome = .failure(retryReason)
                 }
             } else {
                 recordFailure(item: item, reason: reason, wasRetried: false)
+                finalOutcome = firstAttempt
             }
         }
         tempStore.cleanupAfterItem(at: tempStore.tempURL(for: item.localIdentifier))
+        onItemFinished?(item, finalOutcome)
     }
 
     private func recordSuccess(item: PipelineItem, success: PipelineItemSuccess) async {
