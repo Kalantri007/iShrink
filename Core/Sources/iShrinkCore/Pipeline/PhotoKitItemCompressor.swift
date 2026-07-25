@@ -42,20 +42,33 @@ public struct PhotoKitItemCompressor: ItemCompressing {
     private let destinationDirectory: URL
     private let reportAccumulator: CompressionReportAccumulator
     private let assetInfo: [String: AssetReportInfo]
+    private let policyDecisions: [String: CompressionPolicyDecision]
 
     public init(
         imageCompressor: ImageCompressor,
         destinationDirectory: URL,
         reportAccumulator: CompressionReportAccumulator,
-        assetInfo: [String: AssetReportInfo]
+        assetInfo: [String: AssetReportInfo],
+        policyDecisions: [String: CompressionPolicyDecision] = [:]
     ) {
         self.imageCompressor = imageCompressor
         self.destinationDirectory = destinationDirectory
         self.reportAccumulator = reportAccumulator
         self.assetInfo = assetInfo
+        self.policyDecisions = policyDecisions
     }
 
     public func compress(_ item: PipelineItem) async -> ItemCompressionOutcome {
+        // Re-assert `CompressionPolicy`'s decision here, independent of
+        // whatever upstream selection logic produced `item` — this is the
+        // "second guard" U6 built specifically to protect against a stale
+        // or replayed manifest resurfacing an ineligible asset; it was
+        // previously computed (AppModel) but never actually consulted on
+        // this, the real compression path.
+        if let decision = policyDecisions[item.localIdentifier], decision != .proceed {
+            return .failure(.unsupportedFormat)
+        }
+
         guard await Self.exportPrimaryPhotoResource(localIdentifier: item.localIdentifier, to: item.sourceURL) else {
             // Couldn't resolve/export the asset at all (deleted since scan,
             // no photo resource, or the export itself failed) — treated as
@@ -99,6 +112,12 @@ public struct PhotoKitItemCompressor: ItemCompressing {
     /// should already have been filtered to `isLocallyAvailable` well
     /// before it reaches this conformer, but this is the same defensive
     /// belt-and-suspenders the rest of the codebase uses).
+    ///
+    /// Uses `PhotoKitLibrary.primaryResource(among:)` — the same
+    /// full-size-preferring priority order the scanner used to attribute
+    /// this asset's size/filename — so the resource actually compressed
+    /// here always matches the one the analytics/confirmation screens
+    /// described.
     private static func exportPrimaryPhotoResource(localIdentifier: String, to destination: URL) async -> Bool {
         guard
             let asset = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil).firstObject
@@ -106,7 +125,7 @@ public struct PhotoKitItemCompressor: ItemCompressing {
             return false
         }
         let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .photo }) ?? resources.first else {
+        guard let resource = PhotoKitLibrary.primaryResource(among: resources) else {
             return false
         }
 
@@ -143,13 +162,29 @@ public struct PhotoKitItemCompressor: ItemCompressing {
 public actor CompressionReportAccumulator {
     private var itemsByIdentifier: [String: CompressionReportItem] = [:]
 
+    /// Sum of `savedBytes` across every recorded item, maintained
+    /// incrementally in `record()` (O(1) per call) so a caller wanting a
+    /// live running total during a run doesn't need to re-sum `allItems`
+    /// (O(n)) on every single item completion — which would make a whole
+    /// run's worth of progress updates O(n^2).
+    private var totalSavedBytes: Int64 = 0
+
     public init() {}
 
     public func record(_ item: CompressionReportItem) {
+        if let previous = itemsByIdentifier[item.localIdentifier] {
+            totalSavedBytes -= previous.savedBytes
+        }
         itemsByIdentifier[item.localIdentifier] = item
+        totalSavedBytes += item.savedBytes
     }
 
     public var allItems: [CompressionReportItem] {
         Array(itemsByIdentifier.values)
+    }
+
+    /// O(1) running total — see `totalSavedBytes`.
+    public var runningSavedBytes: Int64 {
+        totalSavedBytes
     }
 }

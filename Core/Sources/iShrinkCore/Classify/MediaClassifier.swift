@@ -121,7 +121,12 @@ public struct ImageIOGainMapProbe: GainMapProbing {
         return Self.sourceHasGainMap(source)
     }
 
-    private static func sourceHasGainMap(_ source: CGImageSource) -> Bool {
+    /// Not `private` so `PhotoKitGainMapProbe` (the real, production
+    /// PhotoKit-backed conformer wired into `AppModel`, in
+    /// `Library/PhotoKitGainMapProbe.swift`) can reuse this exact check
+    /// against its own in-memory-fetched `CGImageSource` instead of
+    /// duplicating the auxiliary-data probe logic.
+    static func sourceHasGainMap(_ source: CGImageSource) -> Bool {
         if #available(macOS 13.0, *) {
             guard
                 let auxData = CGImageSourceCopyAuxiliaryDataInfoAtIndex(

@@ -199,14 +199,27 @@ public actor RunManifest {
 
     /// Records one item as done: O(1) — a dictionary insert plus a single
     /// `append` call to the durable store. Triggers a checkpoint only every
-    /// `checkpointInterval` calls.
+    /// `checkpointInterval` calls, or less often as the completed set grows
+    /// (see `nextCheckpointThreshold`) — a full checkpoint rewrites the
+    /// *entire* completed set, so checkpointing at a fixed count interval
+    /// would make the cumulative rewritten-entry total grow quadratically
+    /// with the run size; scaling the gap keeps it near O(n log n).
     public func recordCompletion(_ entry: ManifestEntry) throws {
         completed[entry.localIdentifier] = entry
         try store.append(entry)
         sinceLastCheckpoint += 1
-        if sinceLastCheckpoint >= checkpointInterval {
+        if sinceLastCheckpoint >= nextCheckpointThreshold {
             try checkpointNow()
         }
+    }
+
+    /// How many completions must accumulate before the next checkpoint:
+    /// `checkpointInterval`, or 2% of the current completed-set size,
+    /// whichever is larger. Widening the gap as the set grows keeps a
+    /// checkpoint's O(current size) rewrite cost from being paid at a fixed
+    /// small cadence all the way to 100k+ assets.
+    private var nextCheckpointThreshold: Int {
+        max(checkpointInterval, completed.count / 50)
     }
 
     /// Forces an atomic full-rewrite checkpoint now, regardless of the

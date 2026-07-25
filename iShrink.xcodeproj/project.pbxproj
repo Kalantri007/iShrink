@@ -109,6 +109,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = B9C0DB8D4483F0D0293078D4 /* Build configuration list for PBXNativeTarget "iShrink" */;
 			buildPhases = (
+				930282D9875B01950CEEEC8C /* Enforce Photos read-only invariant */,
 				8C575ECC7196F27EFD2294F0 /* Sources */,
 				57C9161FBE9EBA9DDB5A46D7 /* Frameworks */,
 			);
@@ -159,6 +160,28 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		930282D9875B01950CEEEC8C /* Enforce Photos read-only invariant */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Enforce Photos read-only invariant";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/check-readonly.sh\"";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		8C575ECC7196F27EFD2294F0 /* Sources */ = {

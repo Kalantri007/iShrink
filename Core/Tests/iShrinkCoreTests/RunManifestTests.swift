@@ -104,8 +104,14 @@ import Foundation
         .appendingPathComponent("iShrinkRunManifestTests-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: dir) }
 
+    // Append two entries, but checkpoint with only the first. If checkpoint()
+    // failed to clear the log afterward, a fresh load would still find
+    // "asset-2" sitting in the un-cleared log file even though the
+    // checkpoint intentionally dropped it — that's the scenario a same-entry
+    // round-trip can't distinguish from correct behavior.
     let firstLaunch = FileManifestStore(directory: dir)
     try firstLaunch.append(ManifestEntry(localIdentifier: "asset-1", outputPath: "/tmp/asset-1.heic"))
+    try firstLaunch.append(ManifestEntry(localIdentifier: "asset-2", outputPath: "/tmp/asset-2.heic"))
     try firstLaunch.checkpoint([ManifestEntry(localIdentifier: "asset-1", outputPath: "/tmp/asset-1.heic")])
 
     let secondLaunch = FileManifestStore(directory: dir)

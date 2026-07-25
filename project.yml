@@ -46,3 +46,11 @@ targets:
     dependencies:
       - package: iShrinkCore
         product: iShrinkCore
+    # Actually enforces the read-only invariant on every build, rather than
+    # leaving scripts/check-readonly.sh as a script a developer must
+    # remember to run by hand (code-review finding). Fails the build if a
+    # PhotoKit mutation API ever creeps into iShrinkCore.
+    prebuildScripts:
+      - name: Enforce Photos read-only invariant
+        script: "\"${SRCROOT}/scripts/check-readonly.sh\""
+        basedOnDependencyAnalysis: false

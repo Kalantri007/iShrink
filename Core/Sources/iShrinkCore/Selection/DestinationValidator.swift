@@ -120,8 +120,15 @@ public enum DestinationValidator {
     /// Path-substring check against `cloudSyncPathMarkers`. Not anchored to
     /// the real home directory, so it also matches a simulated cloud-sync
     /// structure a test builds under its own scratch directory.
+    ///
+    /// Resolves symlinks/mount indirection first (`resolvingSymlinksInPath`)
+    /// — a destination folder that merely *looks* ordinary but is, or is
+    /// nested inside, a symlink into a cloud-sync tree must still trigger
+    /// the warning; checking only the as-picked path would let compressed
+    /// output (carrying unredacted GPS/EXIF) land in a synced folder with no
+    /// acknowledgement gate at all.
     static func isCloudSyncPath(_ url: URL) -> Bool {
-        let path = url.standardizedFileURL.path
+        let path = url.resolvingSymlinksInPath().path
         return cloudSyncPathMarkers.contains { path.contains($0) }
     }
 }

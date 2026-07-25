@@ -155,7 +155,7 @@ final class AppModel: ObservableObject {
         // (actually MainActor-isolated) init body.
         authorization: PhotoAuthorization? = nil,
         library: PhotoLibraryProviding = PhotoKitLibrary(),
-        classifier: MediaClassifier = MediaClassifier(),
+        classifier: MediaClassifier = MediaClassifier(gainMapProbe: PhotoKitGainMapProbe()),
         iCloudStore: ICloudPreferenceStoring = UserDefaultsICloudPreferenceStore()
     ) {
         let resolvedAuthorization = authorization ?? PhotoAuthorization()
@@ -392,6 +392,10 @@ final class AppModel: ObservableObject {
             let doneCount = await manifest.completedCount
             await MainActor.run {
                 guard let self else { return }
+                // Reflect items the manifest already recorded complete
+                // (e.g. a crash-then-resume) so the progress bar starts
+                // from the true count instead of always from 0.
+                self.runProgress?.itemsDone = doneCount
                 if doneCount > 0, doneCount < items.count {
                     self.resumePrompt = ResumePrompt(itemsDone: doneCount, itemsRemaining: items.count - doneCount)
                 } else {
@@ -443,17 +447,20 @@ final class AppModel: ObservableObject {
             let tempDirectory = Self.sourceStagingDirectory()
             let imageCompressor = ImageCompressor(tempDirectory: tempDirectory)
             var assetInfo: [String: PhotoKitItemCompressor.AssetReportInfo] = [:]
+            var policyDecisions: [String: CompressionPolicyDecision] = [:]
             for asset in selection {
                 assetInfo[asset.record.localIdentifier] = PhotoKitItemCompressor.AssetReportInfo(
                     filename: asset.record.originalFilename ?? asset.record.localIdentifier,
                     codec: asset.codec
                 )
+                policyDecisions[asset.record.localIdentifier] = CompressionPolicy.evaluate(asset)
             }
             let compressor = PhotoKitItemCompressor(
                 imageCompressor: imageCompressor,
                 destinationDirectory: destinationURL,
                 reportAccumulator: accumulator,
-                assetInfo: assetInfo
+                assetInfo: assetInfo,
+                policyDecisions: policyDecisions
             )
             currentPipeline = CompressionPipeline(
                 compressor: compressor,
@@ -480,8 +487,7 @@ final class AppModel: ObservableObject {
                     Task { @MainActor in
                         guard let self else { return }
                         self.runProgress?.itemsDone += 1
-                        let saved = await accumulator.allItems.reduce(0) { $0 + $1.savedBytes }
-                        self.runningSavedBytes = saved
+                        self.runningSavedBytes = await accumulator.runningSavedBytes
                     }
                 }
             )

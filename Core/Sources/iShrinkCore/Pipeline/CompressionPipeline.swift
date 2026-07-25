@@ -218,12 +218,21 @@ public actor CompressionPipeline {
 
     /// Every per-item failure recorded so far, across every `run(items:)`
     /// call this instance has made (i.e. it accumulates across a
-    /// pause-then-resume sequence on the same instance).
+    /// pause-then-resume sequence on the same instance). At most one entry
+    /// per `localIdentifier` — see `recordFailure`.
     public private(set) var failureLog: [PipelineFailureLogEntry] = []
 
     /// Every `localIdentifier` this instance has itself completed
     /// successfully, across every `run(items:)` call.
     public private(set) var succeededIdentifiers: Set<String> = []
+
+    /// Every `localIdentifier` that has already exhausted its attempt(s)
+    /// (a permanent failure, or a transient failure whose one retry also
+    /// failed) on this instance. The manifest only ever records successes,
+    /// so without this, a resumed run would re-admit and re-attempt an
+    /// already-known-bad item on every pause/resume cycle and pile up
+    /// duplicate `failureLog` entries for it.
+    private var failedIdentifiers: Set<String> = []
 
     public init(
         compressor: ItemCompressing,
@@ -301,8 +310,20 @@ public actor CompressionPipeline {
         onItemStarted: (@Sendable (PipelineItem) -> Void)? = nil,
         onItemFinished: (@Sendable (PipelineItem, ItemCompressionOutcome) -> Void)? = nil
     ) async -> PipelineRunResult {
+        // A Cancel confirmed while this instance was paused (between run()
+        // calls, with no admission loop running to consume the flag) must
+        // still be honored here — resetting it unconditionally below would
+        // silently discard the user's confirmed cancellation and resume as
+        // if it never happened.
+        if cancelRequested {
+            cancelRequested = false
+            return PipelineRunResult(
+                outcome: .cancelled,
+                succeededCount: succeededIdentifiers.count,
+                failures: failureLog
+            )
+        }
         pauseRequested = false
-        cancelRequested = false
 
         _ = try? tempStore.sweepOrphans()
         try? await manifest.load()
@@ -320,6 +341,9 @@ public actor CompressionPipeline {
             if await manifest.isComplete(item.localIdentifier) {
                 continue
             }
+            if failedIdentifiers.contains(item.localIdentifier) {
+                continue
+            }
             queue.append(item)
         }
 
@@ -329,6 +353,12 @@ public actor CompressionPipeline {
 
         func evaluateBoundary() async -> PipelineOutcome? {
             if self.cancelRequested {
+                // Consume the flag now, since it has just been acted upon —
+                // otherwise it would still read `true` at the top of the
+                // *next* `run()` call and be mistaken for a fresh cancel
+                // requested while idle (see that check above), incorrectly
+                // short-circuiting a legitimate subsequent run.
+                self.cancelRequested = false
                 return .cancelled
             }
             if self.pauseRequested {
@@ -435,6 +465,12 @@ public actor CompressionPipeline {
     }
 
     private func recordFailure(item: PipelineItem, reason: ItemFailureReason, wasRetried: Bool) {
+        // This item has exhausted its attempt(s) for good on this instance —
+        // skip it on any later resume rather than re-attempting it forever.
+        failedIdentifiers.insert(item.localIdentifier)
+        // At most one log entry per identifier: replace rather than append,
+        // so a re-attempt (if one ever did occur) can't pile up duplicates.
+        failureLog.removeAll { $0.localIdentifier == item.localIdentifier }
         failureLog.append(PipelineFailureLogEntry(
             localIdentifier: item.localIdentifier,
             filename: item.sourceURL.lastPathComponent,

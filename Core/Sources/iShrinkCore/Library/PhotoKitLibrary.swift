@@ -89,7 +89,12 @@ public actor PhotoKitLibrary: PhotoLibraryProviding {
     /// video), preferring the full-size variant, over auxiliary resources
     /// like `.adjustmentData` or `.pairedVideo`. Falls back to the first
     /// resource if none of the "main content" kinds are present.
-    private static func primaryResource(among resources: [PHAssetResource]) -> PHAssetResource? {
+    ///
+    /// Not `private` so `PhotoKitItemCompressor` (the real compressor) can
+    /// use this exact same priority order when it exports the asset it's
+    /// about to compress — the scan/analytics size and the byte actually
+    /// compressed must agree on which resource is "primary".
+    static func primaryResource(among resources: [PHAssetResource]) -> PHAssetResource? {
         let priority: [PHAssetResourceType] = [.fullSizePhoto, .photo, .fullSizeVideo, .video, .audio]
         for kind in priority {
             if let match = resources.first(where: { $0.type == kind }) {

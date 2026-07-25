@@ -292,19 +292,37 @@ public struct ImageCompressor: Sendable {
 
     // MARK: - Atomic move
 
-    /// Moves `sourceURL` (the finalized temp `.heic`) to `destinationURL`.
-    /// If a file already exists at `destinationURL` (e.g. a stray output
-    /// from a prior interrupted run — U7's territory, but this unit's move
-    /// primitive needs to not crash on it), it is atomically replaced;
-    /// otherwise a plain move is used. Either way, `sourceURL` no longer
-    /// exists once this returns successfully — there is no leftover temp
-    /// file on the success path.
+    /// Moves `sourceURL` (the finalized temp `.heic`, on the app-private
+    /// temp volume) to `destinationURL` (on the user-chosen, often different,
+    /// destination volume). `sourceURL` is first copied to a hidden staging
+    /// file *on the destination volume*, then placed at `destinationURL` via
+    /// `replaceItemAt`/`moveItem` between two paths on the same volume —
+    /// which is a true atomic rename, unlike moving directly from
+    /// `sourceURL` across volumes (that falls back to a non-atomic
+    /// copy-then-delete, which can leave a truncated file at `destinationURL`
+    /// if interrupted mid-copy). If a file already exists at `destinationURL`
+    /// (e.g. a stray output from a prior interrupted run — U7's territory,
+    /// but this unit's move primitive needs to not crash on it), it is
+    /// atomically replaced; otherwise a same-volume move is used. Either way,
+    /// `sourceURL` no longer exists once this returns successfully — there is
+    /// no leftover temp file on the success path.
     private static func atomicMove(from sourceURL: URL, to destinationURL: URL) throws {
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: sourceURL)
-        } else {
-            try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+        let stagingURL = destinationURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(UUID().uuidString).\(destinationURL.lastPathComponent).tmp")
+        try FileManager.default.copyItem(at: sourceURL, to: stagingURL)
+
+        do {
+            if FileManager.default.fileExists(atPath: destinationURL.path) {
+                _ = try FileManager.default.replaceItemAt(destinationURL, withItemAt: stagingURL)
+            } else {
+                try FileManager.default.moveItem(at: stagingURL, to: destinationURL)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: stagingURL)
+            throw error
         }
+
+        try? FileManager.default.removeItem(at: sourceURL)
     }
 
     private static func fileSize(at url: URL) -> Int64 {
