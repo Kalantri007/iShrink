@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import iShrinkCore
 
 // iShrink Phase 1 plan, U3 "Library scanner & asset sizing" test scenarios.
@@ -61,7 +62,8 @@ func makeRecord(
     byteSize: Int64 = 1_000,
     isLocallyAvailable: Bool = true,
     resourceUTIs: [String] = ["public.jpeg"],
-    resourceKinds: [AssetResourceKind] = [.photo]
+    resourceKinds: [AssetResourceKind] = [.photo],
+    creationDate: Date? = nil
 ) -> AssetRecord {
     AssetRecord(
         localIdentifier: id,
@@ -73,7 +75,7 @@ func makeRecord(
         byteSize: byteSize,
         isLocallyAvailable: isLocallyAvailable,
         originalFilename: "\(id).jpg",
-        creationDate: nil,
+        creationDate: creationDate,
         pixelWidth: 100,
         pixelHeight: 100
     )

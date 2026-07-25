@@ -1,34 +1,51 @@
 import SwiftUI
+import AppKit
 import iShrinkCore
 
-/// App entry point. U1 scaffolding only: a minimal placeholder window.
-/// The real permission → scan → analytics → selection → confirmation flow
-/// (`PermissionGateView`, `ScanView`, `AnalyticsDashboardView`, ...) lands in
-/// U8/U9, wired through `AppModel`.
+/// App entry point. U1 shipped a placeholder window; U8 wires it to the
+/// real permission → scan → analytics → selection → confirmation flow,
+/// routed through `AppModel`'s `Stage`.
 @main
 struct iShrinkApp: App {
+    @StateObject private var appModel = AppModel()
+
     var body: some Scene {
         WindowGroup {
-            PlaceholderRootView()
+            RootView(appModel: appModel)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    // Plan U8: "Re-check authorization on app foreground" —
+                    // a user who grants Photos access in System Settings
+                    // advances past the permission gate without relaunching.
+                    appModel.refreshAuthorizationOnForeground()
+                }
         }
     }
 }
 
-/// Placeholder root view, replaced by the real UI flow in U8.
-///
-/// References `iShrinkCoreModule` only to prove the app target links against
-/// the local `iShrinkCore` package (per plan: "App target depends on the
-/// local iShrinkCore package").
-private struct PlaceholderRootView: View {
+/// Routes to one of the five U8 screens based on `AppModel.stage`, and
+/// presents the one-time iCloud first-run question as a sheet over
+/// whichever screen is current when it's triggered.
+struct RootView: View {
+    @ObservedObject var appModel: AppModel
+
     var body: some View {
-        VStack(spacing: 12) {
-            Text("iShrink")
-                .font(.title)
-            Text("Core module linked: \(iShrinkCoreModule.name)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Group {
+            switch appModel.stage {
+            case .permission:
+                PermissionGateView(appModel: appModel)
+            case .scanning:
+                ScanView(appModel: appModel)
+            case .analytics:
+                AnalyticsDashboardView(appModel: appModel)
+            case .selection:
+                SelectionView(appModel: appModel)
+            case .confirmation:
+                ConfirmationView(appModel: appModel)
+            }
         }
-        .frame(minWidth: 400, minHeight: 300)
-        .padding()
+        .frame(minWidth: 480, minHeight: 360)
+        .sheet(isPresented: $appModel.showICloudQuestion) {
+            ICloudQuestionView(appModel: appModel)
+        }
     }
 }

@@ -1,15 +1,13 @@
-// iShrink Phase 1 plan, U4 "Media classifier & storage analytics".
+// iShrink Phase 1 plan, U4 "Media classifier & storage analytics" (enum) and
+// U8 "App UI" (the copy table added below).
 //
 // Exclusion classes that `MediaClassifier` (this directory) attaches when it
 // marks a photo `.excluded` rather than `.compressible`. Kept in its own
 // file per the plan's Output Structure (`Classify/ExclusionReason.swift`),
 // because the plan calls for "enum + user-facing copy table" living
-// together here — U8 (App UI unit) is the one that adds that copy table
-// (`ExclusionReason` → display string, feeding the analytics dashboard's
-// per-reason exclusion summary). U4 only defines the reasons themselves;
-// building out UI copy now would be over-building ahead of U8's actual
-// screen design, so this file intentionally stops at the enum plus one
-// small, logic-relevant computed property (see `isUserActionable` below).
+// together here. U4 defined the reasons themselves; U8's
+// `AnalyticsDashboardView` count-per-reason exclusion summary is the first
+// consumer of `displayText` below.
 
 /// Why a photo was excluded from compression eligibility (R3/R5/R6).
 ///
@@ -68,6 +66,28 @@ public enum ExclusionReason: Sendable, Equatable, Hashable, CaseIterable {
             return true
         case .rawMaster, .hdrUnpreservable, .alreadyHeic, .livePhoto, .editedPhoto:
             return false
+        }
+    }
+
+    /// User-facing copy table (plan U8: "`ExclusionReason` → copy string
+    /// table, defined alongside the enum so phrasing is consistent"). This
+    /// is the single source of truth `AnalyticsDashboardView`'s
+    /// count-per-reason exclusion summary reads from — the View itself
+    /// carries no reason-to-string logic of its own.
+    public var displayText: String {
+        switch self {
+        case .rawMaster:
+            return "RAW / ProRAW master file"
+        case .hdrUnpreservable:
+            return "HDR (can't be preserved yet)"
+        case .iCloudOnly:
+            return "iCloud-only (not downloaded to this Mac)"
+        case .alreadyHeic:
+            return "Already HEIC"
+        case .livePhoto:
+            return "Live Photo"
+        case .editedPhoto:
+            return "Edited photo"
         }
     }
 }
