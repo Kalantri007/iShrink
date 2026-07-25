@@ -10,6 +10,11 @@ xcuserdata/
 .swiftpm/
 Package.resolved
 
+# Explicit Xcode per-user state paths (xcuserdata/ above already matches
+# these anywhere in the tree; kept explicit for clarity/defense-in-depth).
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
 # Editors
 .vscode/
 .idea/

@@ -1,0 +1,56 @@
+name: iShrink
+options:
+  bundleIdPrefix: com.ishrink
+  deploymentTarget:
+    macOS: "12.0"
+  createIntermediateGroups: true
+
+packages:
+  iShrinkCore:
+    path: Core
+
+targets:
+  iShrink:
+    type: application
+    platform: macOS
+    deploymentTarget: "12.0"
+    sources:
+      - path: App
+        excludes:
+          - "Info.plist"
+          - "iShrink.entitlements"
+          - "README.md"
+    settings:
+      base:
+        # INFOPLIST_FILE / CODE_SIGN_ENTITLEMENTS point at our own
+        # hand-authored plists. Deliberately NOT using XcodeGen's top-level
+        # `info:`/`entitlements:` generation keys: those tell XcodeGen to
+        # generate (and overwrite) the plist at that path from scratch,
+        # which destroys the custom NSPhotoLibraryUsageDescription /
+        # NSPhotoLibraryAddUsageDescription / sandbox-entitlement content
+        # written by hand for U1 — confirmed by observing `xcodegen generate`
+        # blank out both files on first run.
+        INFOPLIST_FILE: App/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.ishrink.app
+        PRODUCT_NAME: iShrink
+        MACOSX_DEPLOYMENT_TARGET: "12.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: App/iShrink.entitlements
+        # No Developer Team configured yet; set locally or via xcconfig
+        # before attempting a signed archive/notarization build.
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: iShrinkCore
+        product: iShrinkCore
+    # Actually enforces the read-only invariant on every build, rather than
+    # leaving scripts/check-readonly.sh as a script a developer must
+    # remember to run by hand (code-review finding). Fails the build if a
+    # PhotoKit mutation API ever creeps into iShrinkCore.
+    prebuildScripts:
+      - name: Enforce Photos read-only invariant
+        script: "\"${SRCROOT}/scripts/check-readonly.sh\""
+        basedOnDependencyAnalysis: false
