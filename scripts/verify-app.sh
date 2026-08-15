@@ -63,6 +63,15 @@ REQUIRED_ENTITLEMENTS=(
   "com.apple.security.files.user-selected.read-write"
 )
 
+# Entitlements that must NOT be present in a bundle we hand to anyone else.
+# get-task-allow lets any process attach a debugger to the running app and
+# read its memory. Xcode injects it automatically for locally-signed builds,
+# which is fine on your own machine and not fine in a published release, so
+# build-app.sh disables the injection and this asserts it worked.
+FORBIDDEN_ENTITLEMENTS=(
+  "com.apple.security.get-task-allow"
+)
+
 REQUIRED_ARCHS=(
   "arm64"
   "x86_64"
@@ -128,6 +137,14 @@ else
       echo "verify-app: OK — entitlement present: ${entitlement}"
     else
       fail "signed binary is missing entitlement '${entitlement}'."
+    fi
+  done
+
+  for entitlement in "${FORBIDDEN_ENTITLEMENTS[@]}"; do
+    if printf '%s' "${entitlements}" | grep -q -- "${entitlement}"; then
+      fail "signed binary carries forbidden entitlement '${entitlement}'."
+    else
+      echo "verify-app: OK — entitlement absent, as required: ${entitlement}"
     fi
   done
 fi
