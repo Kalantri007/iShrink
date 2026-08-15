@@ -34,6 +34,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ishrink.app
         PRODUCT_NAME: iShrink
         MACOSX_DEPLOYMENT_TARGET: "12.0"
+        # Local-development defaults only. Release builds do NOT use these:
+        # scripts/build-app.sh derives the version from the git tag and passes
+        # it to xcodebuild as a setting override, so the committed
+        # .xcodeproj and the hand-authored Info.plist stay untouched (see the
+        # INFOPLIST_FILE note above). Bumping these by hand does not affect
+        # what a release reports.
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.9"

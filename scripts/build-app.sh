@@ -24,6 +24,7 @@ set -euo pipefail
 #   scripts/build-app.sh                 # build, verify, install to /Applications
 #   scripts/build-app.sh --no-install    # build and verify only (used by CI)
 #   scripts/build-app.sh --output-dir D  # place the built .app in D
+#   scripts/build-app.sh --version 1.2.3 # override the derived version
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -39,6 +40,7 @@ BUILD_ROOT="${REPO_ROOT}/build/xcodebuild"
 OUTPUT_DIR="${REPO_ROOT}/build/export"
 INSTALL_DIR="/Applications"
 DO_INSTALL=1
+VERSION_OVERRIDE="${ISHRINK_VERSION:-}"
 
 # --- Arguments --------------------------------------------------------------
 
@@ -54,6 +56,14 @@ while [ $# -gt 0 ]; do
         exit 2
       fi
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --version)
+      if [ $# -lt 2 ]; then
+        echo "build-app: --version requires a version argument." >&2
+        exit 2
+      fi
+      VERSION_OVERRIDE="$2"
       shift 2
       ;;
     -h|--help)
@@ -99,6 +109,81 @@ if [ ! -x "${SCRIPT_DIR}/verify-app.sh" ]; then
   exit 1
 fi
 
+# --- Version ----------------------------------------------------------------
+#
+# The version comes from the git tag, not from MARKETING_VERSION in
+# project.yml. Homebrew compares versions to decide whether `brew upgrade`
+# has anything to do, so a bundle that reports 1.0.0 forever would make
+# every release look identical to the one before it.
+#
+# It is passed to xcodebuild as a setting override rather than written into
+# project.yml or the Info.plist. Those are hand-authored files that
+# regenerating would clobber (see the INFOPLIST_FILE note in project.yml),
+# and a build should not leave the working tree modified.
+
+git_available() {
+  command -v git >/dev/null 2>&1 && \
+    git -C "${REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1
+}
+
+resolve_version() {
+  # An explicit --version (or ISHRINK_VERSION) always wins. CI passes the
+  # tag it was triggered by rather than re-deriving it, so the released
+  # version cannot disagree with the tag that produced it.
+  if [ -n "${VERSION_OVERRIDE}" ]; then
+    printf '%s' "${VERSION_OVERRIDE}"
+    return
+  fi
+
+  if ! git_available; then
+    printf '0.0.0-dev.nogit'
+    return
+  fi
+
+  # Only an *exact* tag on HEAD counts as a release version. Using the
+  # nearest tag instead would let a working copy several commits past v1.0.0
+  # claim to be v1.0.0.
+  local tag
+  tag="$(git -C "${REPO_ROOT}" describe --tags --exact-match 2>/dev/null || true)"
+  if [ -n "${tag}" ]; then
+    # Tags are written v1.2.3; CFBundleShortVersionString wants 1.2.3.
+    printf '%s' "${tag#v}"
+    return
+  fi
+
+  local sha
+  sha="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+  printf '0.0.0-dev.%s' "${sha}"
+}
+
+resolve_build_number() {
+  # CFBundleVersion must be monotonically increasing for macOS to consider a
+  # bundle newer than the one it replaces. Commit count gives that for free
+  # and is always a plain integer, which the tag name is not.
+  if git_available; then
+    git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || echo "1"
+  else
+    echo "1"
+  fi
+}
+
+APP_VERSION="$(resolve_version)"
+BUILD_NUMBER="$(resolve_build_number)"
+
+if [ -n "${VERSION_OVERRIDE}" ]; then
+  echo "build-app: version ${APP_VERSION} (build ${BUILD_NUMBER}) — explicit override."
+else
+  case "${APP_VERSION}" in
+    *-dev.*)
+      echo "build-app: version ${APP_VERSION} (build ${BUILD_NUMBER}) — development build,"
+      echo "build-app: HEAD is not on a tag. Tag the commit to produce a release version."
+      ;;
+    *)
+      echo "build-app: version ${APP_VERSION} (build ${BUILD_NUMBER}) — from git tag."
+      ;;
+  esac
+fi
+
 # --- Build ------------------------------------------------------------------
 #
 # Signing settings are overridden per-invocation rather than changed in
@@ -126,6 +211,8 @@ xcodebuild build \
   -configuration "${CONFIGURATION}" \
   SYMROOT="${BUILD_ROOT}" \
   OBJROOT="${BUILD_ROOT}/Intermediates" \
+  MARKETING_VERSION="${APP_VERSION}" \
+  CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
   ARCHS="arm64 x86_64" \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGN_STYLE=Manual \

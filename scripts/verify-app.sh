@@ -77,6 +77,15 @@ fail() {
 
 echo "verify-app: checking ${APP_PATH}"
 
+# Report the version the bundle actually claims. In a CI log this is the
+# difference between "a release was published" and knowing *which* version
+# was published, and it catches a version override that silently didn't take.
+bundle_version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+  "${APP_PATH}/Contents/Info.plist" 2>/dev/null || echo "unknown")"
+bundle_build="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" \
+  "${APP_PATH}/Contents/Info.plist" 2>/dev/null || echo "unknown")"
+echo "verify-app: version ${bundle_version} (build ${bundle_build})"
+
 # --- 1. The bundle is structurally an app -----------------------------------
 
 if [ ! -f "${INFO_PLIST}" ]; then
