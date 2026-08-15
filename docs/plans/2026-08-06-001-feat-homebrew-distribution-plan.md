@@ -61,7 +61,7 @@ Phase 1 is merged and passing 112 tests, but iShrink is not usable as an app —
 - `scripts/check-readonly.sh` — wired as a `prebuildScripts` entry on the `iShrink` target. It will run inside CI builds automatically; this is desirable and must not be bypassed.
 - `iShrink.xcodeproj` is committed to the repo (only `xcuserdata` is gitignored), so CI can build without running XcodeGen.
 - No `.github/` directory exists. There is no existing CI, release, or packaging pattern in this repo to follow — all of it is new.
-- `Kalantri007/iShrink` is currently a **private** repository (confirmed via `gh repo view`). This must change before U3/U4 are exercised — see R9.
+- `Kalantri007/iShrink` was private when this plan was written, which would have broken unauthenticated cask downloads. It was made **public on 2026-08-07** (confirmed via `gh repo view`), satisfying the first half of R9. The second half — the `homebrew-tap` repository — does not exist yet and must also be created public before U4 can be exercised.
 
 ### External References
 

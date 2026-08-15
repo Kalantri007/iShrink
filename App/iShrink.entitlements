@@ -10,6 +10,22 @@
 	<true/>
 
 	<!--
+	  Required by the output-folder picker in ConfirmationView /
+	  AppModel.chooseDestination(). Under App Sandbox the open panel is drawn
+	  by a separate system process (Powerbox), which returns a URL *and* the
+	  right to use it. Without this entitlement there is no such right, so the
+	  panel hands nothing back and the "Choose Folder…" button silently does
+	  nothing — no crash, no error, no log line.
+
+	  read-write rather than read-only: the compression run writes the new
+	  HEIC files into the folder the user picks. Scope is still only what the
+	  user explicitly selects in the panel; this grants no ambient filesystem
+	  access, and in particular still grants no network access.
+	-->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+
+	<!--
 	  Deliberately NO com.apple.security.network.client (or any other network
 	  entitlement) here. Plan Key Technical Decisions: "App Sandbox enabled
 	  with no network entitlement" — R13 ("all processing is local; nothing
