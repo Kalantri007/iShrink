@@ -1,0 +1,171 @@
+name: Release
+
+# Releases are deliberate. Only a pushed version tag builds and publishes
+# one — ordinary commits to main do nothing here.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  # `gh release create` writes to this repository's Releases. Nothing else in
+  # this workflow needs write access, so nothing else is granted.
+  contents: write
+
+env:
+  # Pinned, never floating. The macos-latest label moved to macos-26 in mid
+  # 2026 and will move again; an unpinned Xcode is how a workflow like this
+  # rots silently and produces a subtly different bundle months later.
+  #
+  # 26.2 specifically because that is the Xcode the local build path was
+  # validated against, so a maintainer's Mac and this runner produce
+  # equivalent bundles rather than merely similar ones.
+  XCODE_APP: /Applications/Xcode_26.2.app
+
+jobs:
+  release:
+    name: Build, verify, and publish iShrink.app
+    runs-on: macos-26
+
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@v7
+        with:
+          # scripts/build-app.sh derives CFBundleVersion from the commit
+          # count. A shallow clone would report 1 for every release, and
+          # macOS uses that number to decide whether one bundle is newer
+          # than the one it is replacing.
+          fetch-depth: 0
+
+      - name: Select the pinned Xcode
+        run: |
+          set -euo pipefail
+          if [ ! -d "${XCODE_APP}" ]; then
+            echo "::error::${XCODE_APP} is not installed on this runner image."
+            echo "The runner image changed its Xcode lineup. Pick a version it"
+            echo "actually ships and update XCODE_APP — do not switch to the"
+            echo "default, which floats."
+            echo "Available:"
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo "  (none found)"
+            exit 1
+          fi
+          sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          xcodebuild -version
+
+      - name: Derive the version from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          # Tags are written v1.2.3; CFBundleShortVersionString wants 1.2.3.
+          version="${GITHUB_REF_NAME#v}"
+          if [ -z "${version}" ]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' has no version after the 'v' prefix."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${version} from tag ${GITHUB_REF_NAME}"
+
+      - name: Build and verify the app
+        # The build logic lives in the script, not in this YAML, so the
+        # release path and the local path cannot drift apart. The version is
+        # passed explicitly rather than re-derived, so the published version
+        # cannot disagree with the tag that triggered this run.
+        #
+        # build-app.sh runs scripts/check-readonly.sh as a build phase and
+        # scripts/verify-app.sh at the end. Either failing fails this step,
+        # and a failed step means no release is published at all.
+        run: ./scripts/build-app.sh --no-install --version "${{ steps.version.outputs.version }}"
+
+      - name: Archive the app
+        id: archive
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          # Written outside the checkout, so running this logic locally does
+          # not drop a build artifact into the working tree where it could be
+          # committed by accident.
+          archive="${RUNNER_TEMP}/iShrink-${version}.zip"
+
+          # ditto rather than zip: both preserve the signature of today's
+          # bundle, which contains no symlinks or embedded frameworks. ditto
+          # is used anyway because it is Apple's own tool and stays correct
+          # when that stops being true — a plain zip can flatten the
+          # versioned symlinks inside a framework and invalidate the
+          # signature, which would only be discovered by a user.
+          ditto -c -k --sequesterRsrc --keepParent \
+            "${GITHUB_WORKSPACE}/build/export/iShrink.app" "${archive}"
+
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$(basename "${archive}")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the archive round-trips
+        # Verifying the bundle before archiving proves the build was good. It
+        # does not prove the thing users actually download is good. This
+        # unpacks the published artifact and re-runs the identical checks, so
+        # an archiver that damages the signature is caught here rather than
+        # by whoever installs it.
+        run: |
+          set -euo pipefail
+          roundtrip="${RUNNER_TEMP}/roundtrip"
+          rm -rf "${roundtrip}"
+          mkdir -p "${roundtrip}"
+          ditto -x -k "${{ steps.archive.outputs.archive }}" "${roundtrip}"
+          ./scripts/verify-app.sh "${roundtrip}/iShrink.app"
+
+      - name: Compute the checksum
+        id: checksum
+        run: |
+          set -euo pipefail
+          sha="$(shasum -a 256 "${{ steps.archive.outputs.archive }}" | awk '{print $1}')"
+          echo "sha256=${sha}" >> "$GITHUB_OUTPUT"
+          echo "SHA-256: ${sha}"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCHIVE: ${{ steps.archive.outputs.archive }}
+          ARCHIVE_NAME: ${{ steps.archive.outputs.archive_name }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          # The checksum goes in the release notes so updating the Homebrew
+          # cask is a copy-paste rather than a download-and-hash chore.
+          notes="$(cat <<NOTES
+          iShrink ${VERSION}
+
+          **Install**
+
+          \`\`\`
+          brew install --cask Kalantri007/tap/ishrink
+          \`\`\`
+
+          **Cask values for this release**
+
+          \`\`\`ruby
+          version "${VERSION}"
+          sha256 "${SHA256}"
+          \`\`\`
+
+          **Before it will open**
+
+          This app is ad-hoc signed rather than signed with a paid Apple
+          Developer ID, so macOS quarantines it after download and refuses to
+          open it. Clear the quarantine flag once, after installing:
+
+          \`\`\`
+          sudo xattr -rd com.apple.quarantine /Applications/iShrink.app
+          \`\`\`
+
+          macOS will ask for Photos access again after every update. Each
+          release is signed with a different ad-hoc identity, and macOS keys
+          permission grants to that identity, so it treats each release as a
+          new app.
+          NOTES
+          )"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            "${ARCHIVE}#${ARCHIVE_NAME}" \
+            --title "iShrink ${VERSION}" \
+            --notes "${notes}"
