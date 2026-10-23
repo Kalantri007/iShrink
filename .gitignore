@@ -1,0 +1,11 @@
+# macOS Finder metadata
+.DS_Store
+
+# Build output (Swift Package Manager, Xcode, local scripts)
+build/
+.build/
+.swiftpm/
+DerivedData/
+
+# Xcode per-user settings
+xcuserdata/
